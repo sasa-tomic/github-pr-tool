@@ -184,7 +184,7 @@ fn git_current_branch() -> Result<String, std::io::Error> {
 
 fn git_fetch_main(current_branch: &String, main_branch: &String) -> Result<(), std::io::Error> {
     if current_branch == main_branch {
-        Command::new("git").args(["fetch", "origin"]).status()?;
+        Command::new("git").args(["pull", "origin"]).status()?;
     } else {
         Command::new("git")
             .args([
