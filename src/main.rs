@@ -64,6 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Let's come up with a nice PR title and description
     let (_, commit_title, commit_details) =
         gpt_generate_branch_name_and_commit_description(diff_between_branches).await?;
+    git_push_branch(&current_branch)?;
     gh_pr_create(&commit_title, &commit_details.unwrap_or_default())?;
 
     Ok(())
@@ -215,6 +216,13 @@ fn git_stage_and_commit(
     Ok(())
 }
 
+fn git_push_branch(branch_name: &String) -> Result<(), std::io::Error> {
+    Command::new("git")
+        .args(["push", "origin", &branch_name])
+        .status()?;
+    Ok(())
+}
+
 fn gh_pr_create(title: &str, body: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Create a GitHub PR, now that we have a branch and a commit locally
     Command::new("gh")
@@ -231,7 +239,7 @@ async fn gpt_generate_branch_name_and_commit_description(
         ChatCompletionMessage {
             role: ChatCompletionMessageRole::System,
             content: Some(
-                "You are a helpful assistant that helps to prepare GitHub PRs. You will provide output in JSON format with keys: 'branch_name', 'commit_title', and 'commit_details'. For a very small PR return 'commit_details' as null, otherwise humbly and politely in a well structured markdown format describe all changes in the PR. Also provide the impact of the changes but only if there is clear and significant impact. Do not use empty words or sentences such as 'this enhances'. Follow the Conventional Commits specification for formatting PR descriptions.".to_string(),
+                "You are a helpful assistant that helps to prepare GitHub PRs. You will provide output in JSON format with keys: 'branch_name', 'commit_title', and 'commit_details'. For a very small PR return 'commit_details' as null, otherwise humbly and politely in a well structured markdown format describe all changes in the PR. Do not describe the impact unless there is a breaking change. Follow the Conventional Commits specification for formatting PR descriptions.".to_string(),
             ),
             ..Default::default()
         },
