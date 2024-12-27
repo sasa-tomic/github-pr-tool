@@ -44,13 +44,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Remember the current branch
-    let current_branch = Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .output()?;
-
-    let upstream_branch = String::from_utf8(current_branch.stdout)?.trim().to_string();
-
     // Generate a branch name and commit description using OpenAI
     let diff_context_str = fetch_diff_context()?;
 
@@ -85,16 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .status()?;
 
     // Create a GitHub PR
-    let pr_status = Command::new("gh")
-        .args([
-            "pr",
-            "create",
-            "--base",
-            &upstream_branch,
-            "--head",
-            &branch_name_str,
-        ])
-        .status()?;
+    let pr_status = Command::new("gh").args(["pr", "create"]).status()?;
 
     if pr_status.success() {
         println!("Pull request created successfully.");
