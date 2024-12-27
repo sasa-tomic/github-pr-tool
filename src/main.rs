@@ -25,6 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let current_branch = git_current_branch()?;
+    git_ensure_not_detached_head(&current_branch)?;
 
     git_fetch_main(&current_branch, &main_branch)?;
 
@@ -84,6 +85,14 @@ fn git_ensure_in_repo() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn git_ensure_not_detached_head(branch_name: &String) -> Result<(), Box<dyn std::error::Error>> {
+    if branch_name == "HEAD" {
+        error!("Detached HEAD state detected. Please check out a branch.");
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
 fn git_cd_to_repo_root() -> Result<(), Box<dyn std::error::Error>> {
     let output = Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
@@ -96,7 +105,7 @@ fn git_cd_to_repo_root() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn git_diff_uncommitted() -> Result<String, Box<dyn std::error::Error>> {
-    let mut diff_context = String::from_utf8(
+    let diff_context = String::from_utf8(
         Command::new("git")
             .args(["diff", "--cached", "--", ".", ":!*.lock"])
             .output()?
@@ -106,18 +115,14 @@ fn git_diff_uncommitted() -> Result<String, Box<dyn std::error::Error>> {
     .to_string();
 
     if diff_context.is_empty() {
-        diff_context = String::from_utf8(
+        return Ok(String::from_utf8(
             Command::new("git")
                 .args(["diff", "--", ".", ":!*.lock"])
                 .output()?
                 .stdout,
         )?
         .trim()
-        .to_string();
-    }
-
-    if diff_context.is_empty() {
-        diff_context = "".to_string();
+        .to_string());
     }
 
     Ok(diff_context)
@@ -238,8 +243,9 @@ async fn gpt_generate_branch_name_and_commit_description(
             ..Default::default()
         },
     ];
+    let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
 
-    let chat_request = ChatCompletion::builder("gpt-4o-mini", messages.clone())
+    let chat_request = ChatCompletion::builder(&model, messages.clone())
         .credentials(credentials.clone())
         .create()
         .await?;
