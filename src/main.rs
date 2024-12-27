@@ -24,9 +24,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
-    git_fetch_main(&main_branch)?;
-
     let current_branch = git_current_branch()?;
+
+    git_fetch_main(&current_branch, &main_branch)?;
 
     info!(
         "Main branch: {}, current branch: {}",
@@ -66,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Let's come up with a nice PR title and description
     let (_, commit_title, commit_details) =
         gpt_generate_branch_name_and_commit_description(diff_between_branches).await?;
-    gh_pr_create(&commit_title, &commit_details.unwrap_or_default());
+    gh_pr_create(&commit_title, &commit_details.unwrap_or_default())?;
 
     Ok(())
 }
@@ -179,14 +179,18 @@ fn git_current_branch() -> Result<String, std::io::Error> {
     .to_string())
 }
 
-fn git_fetch_main(main_branch: &String) -> Result<(), std::io::Error> {
-    Command::new("git")
-        .args([
-            "fetch",
-            "origin",
-            format!("{}:{}", main_branch, main_branch).as_str(),
-        ])
-        .status()?;
+fn git_fetch_main(current_branch: &String, main_branch: &String) -> Result<(), std::io::Error> {
+    if current_branch == main_branch {
+        Command::new("git").args(["fetch", "origin"]).status()?;
+    } else {
+        Command::new("git")
+            .args([
+                "fetch",
+                "origin",
+                format!("{}:{}", main_branch, main_branch).as_str(),
+            ])
+            .status()?;
+    }
 
     Ok(())
 }
