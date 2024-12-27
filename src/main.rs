@@ -24,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
-    let current_branch = git_current_branch()?;
+    let mut current_branch = git_current_branch()?;
     git_ensure_not_detached_head(&current_branch)?;
 
     git_fetch_main(&current_branch, &main_branch)?;
@@ -48,7 +48,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .status()?;
         }
 
-        stage_and_commit(&commit_title, &commit_details)?;
+        git_stage_and_commit(&commit_title, &commit_details)?;
+        current_branch = branch_name;
     } else if current_branch == main_branch {
         info!("No changes to commit.");
         std::process::exit(0);
@@ -196,7 +197,7 @@ fn git_fetch_main(current_branch: &String, main_branch: &String) -> Result<(), s
     Ok(())
 }
 
-fn stage_and_commit(
+fn git_stage_and_commit(
     commit_title: &String,
     commit_details: &Option<String>,
 ) -> Result<(), std::io::Error> {
