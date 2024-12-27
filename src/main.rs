@@ -40,10 +40,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (branch_name, commit_title, commit_details) =
             gpt_generate_branch_name_and_commit_description(diff_uncommitted).await?;
 
-        info!(
-            "current branch {} main branch {}",
-            current_branch, main_branch
-        );
         if current_branch == main_branch {
             // Create a new branch
             Command::new("git")
@@ -242,7 +238,7 @@ async fn gpt_generate_branch_name_and_commit_description(
             ..Default::default()
         },
     ];
-    info!("req {:#?}", messages);
+
     let chat_request = ChatCompletion::builder("gpt-4o-mini", messages.clone())
         .credentials(credentials.clone())
         .create()
