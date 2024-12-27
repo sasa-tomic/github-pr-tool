@@ -163,6 +163,7 @@ fn git_main_branch() -> Result<String, Box<dyn std::error::Error>> {
 
     Ok(String::from_utf8(main_branch_output.stdout)?
         .trim()
+        .trim_start_matches("origin/")
         .to_string())
 }
 
