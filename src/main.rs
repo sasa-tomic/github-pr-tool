@@ -198,7 +198,7 @@ fn git_fetch_main(current_branch: &String, main_branch: &String) -> Result<(), s
 }
 
 fn git_stage_and_commit(
-    commit_title: &String,
+    commit_title: &str,
     commit_details: &Option<String>,
 ) -> Result<(), std::io::Error> {
     Command::new("git").args(["add", "."]).status()?;
@@ -215,7 +215,7 @@ fn git_stage_and_commit(
     Ok(())
 }
 
-fn gh_pr_create(title: &String, body: &String) -> Result<(), Box<dyn std::error::Error>> {
+fn gh_pr_create(title: &str, body: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Create a GitHub PR, now that we have a branch and a commit locally
     Command::new("gh")
         .args(["pr", "create", "--title", title, "--body", body])
