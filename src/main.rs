@@ -216,9 +216,9 @@ fn git_stage_and_commit(
     Ok(())
 }
 
-fn git_push_branch(branch_name: &String) -> Result<(), std::io::Error> {
+fn git_push_branch(branch_name: &str) -> Result<(), std::io::Error> {
     Command::new("git")
-        .args(["push", "origin", &branch_name])
+        .args(["push", "origin", branch_name])
         .status()?;
     Ok(())
 }
