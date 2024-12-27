@@ -73,7 +73,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     stage_and_commit(&commit_title, &commit_details)?;
 
     // Create a GitHub PR, now that we have a branch and a commit locally
-    let pr_status = Command::new("gh").args(["pr", "create"]).status()?;
+    let pr_status = Command::new("gh")
+        .args([
+            "pr",
+            "create",
+            "--title",
+            &commit_title,
+            "--body",
+            &commit_details.unwrap_or_default(),
+        ])
+        .status()?;
 
     if pr_status.success() {
         println!("Pull request created successfully.");
