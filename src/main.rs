@@ -63,7 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Let's come up with a nice PR title and description
     let (_, commit_title, commit_details) =
         gpt_generate_branch_name_and_commit_description(diff_between_branches).await?;
-    git_push_branch(&current_branch);
+    git_push_branch(&current_branch)?;
     gh_pr_create(&commit_title, &commit_details.unwrap_or_default())?;
 
     Ok(())
@@ -238,7 +238,7 @@ async fn gpt_generate_branch_name_and_commit_description(
         ChatCompletionMessage {
             role: ChatCompletionMessageRole::System,
             content: Some(
-                "You are a helpful assistant that helps to prepare GitHub PRs. You will provide output in JSON format with keys: 'branch_name', 'commit_title', and 'commit_details'. For a very small PR return 'commit_details' as null, otherwise humbly and politely in a well structured markdown format describe all changes in the PR. Follow the Conventional Commits specification for formatting PR descriptions.".to_string(),
+                "You are a helpful assistant that helps to prepare GitHub PRs. You will provide output in JSON format with keys: 'branch_name', 'commit_title', and 'commit_details'. For a very small PR return 'commit_details' as null, otherwise humbly and politely in a well structured markdown format describe all changes in the PR. Do not describe the impact unless there is a breaking change. Follow the Conventional Commits specification for formatting PR descriptions.".to_string(),
             ),
             ..Default::default()
         },
