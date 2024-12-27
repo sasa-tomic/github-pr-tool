@@ -181,9 +181,9 @@ fn stage_and_commit(
 ) -> Result<(), std::io::Error> {
     Command::new("git").args(["add", "."]).status()?;
 
-    let mut commit_message = commit_title.clone();
+    let mut commit_message = commit_title.trim().to_string();
     if let Some(details) = commit_details {
-        commit_message.push_str(&format!("\n\n{}", details));
+        commit_message.push_str(&format!("\n\n{}", details.trim()));
     }
 
     Command::new("git")
