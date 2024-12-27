@@ -31,6 +31,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
+    git_fetch_main(&main_branch)?;
+
     let current_branch = git_current_branch()?;
 
     info!(
@@ -173,6 +175,18 @@ fn git_current_branch() -> Result<String, std::io::Error> {
     .unwrap()
     .trim()
     .to_string())
+}
+
+fn git_fetch_main(main_branch: &String) -> Result<(), std::io::Error> {
+    Command::new("git")
+        .args([
+            "fetch",
+            "origin",
+            format!("{}:{}", main_branch, main_branch).as_str(),
+        ])
+        .status()?;
+
+    Ok(())
 }
 
 fn stage_and_commit(
