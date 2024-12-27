@@ -14,15 +14,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
-    // Ensure we are in a git repository
-    let git_status = Command::new("git")
-        .args(["rev-parse", "--is-inside-work-tree"])
-        .output()?;
-
-    if !git_status.status.success() {
-        error!("Not a git repository.");
-        return Ok(());
-    }
+    git_ensure_in_repo()?;
+    git_cd_to_repo_root()?;
 
     let main_branch = git_main_branch().unwrap_or_else(|_| "main".to_string());
 
@@ -40,55 +33,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         main_branch, current_branch
     );
 
-    let git_diff_string = fetch_diff_context(&main_branch, &current_branch)?;
-    info!("git diff: {}", git_diff_string);
+    let diff_uncommitted = git_diff_uncommitted()?;
 
-    if current_branch == main_branch && git_diff_string.is_empty() {
+    if !diff_uncommitted.is_empty() {
+        // We have uncommitted changes, let's stage and commit them
+        let (branch_name, commit_title, commit_details) =
+            gpt_generate_branch_name_and_commit_description(diff_uncommitted).await?;
+
+        if current_branch == main_branch {
+            // Create a new branch
+            Command::new("git")
+                .args(["checkout", "-b", &branch_name])
+                .status()?;
+        }
+
+        stage_and_commit(&commit_title, &commit_details)?;
+    } else if current_branch == main_branch {
         info!("No changes to commit.");
         std::process::exit(0);
     }
 
-    let (branch_name_str, commit_title, commit_details) =
-        gpt_generate_branch_name_and_commit_description(git_diff_string)
-            .await
-            .unwrap_or((
-                "my-pr-branch".to_string(),
-                "Generic commit title".to_string(),
-                None,
-            ));
-    info!(
-        "branch {} commit title {} details {}",
-        branch_name_str,
-        commit_title,
-        commit_details.clone().unwrap_or_default()
-    );
-
-    if current_branch == main_branch {
-        // Create a new branch
-        Command::new("git")
-            .args(["checkout", "-b", &branch_name_str])
-            .status()?;
+    // Let's check if we have any changes between the branches
+    let diff_between_branches = git_diff_between_branches(&main_branch, &current_branch)?;
+    if diff_between_branches.is_empty() {
+        info!("No changes between the branches.");
+        std::process::exit(0);
     }
-
-    stage_and_commit(&commit_title, &commit_details)?;
-
-    // Create a GitHub PR, now that we have a branch and a commit locally
-    let pr_status = Command::new("gh")
-        .args([
-            "pr",
-            "create",
-            "--title",
-            &commit_title,
-            "--body",
-            &commit_details.unwrap_or_default(),
-        ])
-        .status()?;
-
-    if pr_status.success() {
-        println!("Pull request created successfully.");
-    } else {
-        eprintln!("Failed to create pull request.");
-    }
+    // Let's come up with a nice PR title and description
+    let (_, commit_title, commit_details) =
+        gpt_generate_branch_name_and_commit_description(diff_between_branches).await?;
+    gh_pr_create(&commit_title, &commit_details.unwrap_or_default());
 
     Ok(())
 }
@@ -99,47 +73,73 @@ fn init_logger() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(log_level)).init();
 }
 
-fn fetch_diff_context(
-    main_branch: &String,
-    current_branch: &String,
-) -> Result<String, Box<dyn std::error::Error>> {
-    let mut diff_context;
-
-    // Check for staged changes
-    let staged_diff = Command::new("git")
-        .args(["diff", "--cached", "--", ":!*.lock"])
+fn git_ensure_in_repo() -> Result<(), Box<dyn std::error::Error>> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--is-inside-work-tree"])
         .output()?;
-    if !staged_diff.stdout.is_empty() {
-        diff_context = String::from_utf8(staged_diff.stdout)?;
-    } else {
-        // Check for unstaged changes
-        let unstaged_diff = Command::new("git")
-            .args(["diff", "--", ":!*.lock"])
-            .output()?;
-        if !unstaged_diff.stdout.is_empty() {
-            diff_context = String::from_utf8(unstaged_diff.stdout)?;
-        } else {
-            diff_context = String::from_utf8(
-                Command::new("git")
-                    .args([
-                        "diff",
-                        &format!("{}...{}", main_branch, current_branch),
-                        "--",
-                        ":!*.lock",
-                    ])
-                    .output()?
-                    .stdout,
-            )?
-            .trim()
-            .to_string();
-        }
+    if !output.status.success() {
+        error!("Not in a git repository.");
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn git_cd_to_repo_root() -> Result<(), Box<dyn std::error::Error>> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()?;
+    if output.status.success() {
+        let repo_root = String::from_utf8(output.stdout)?.trim().to_string();
+        std::env::set_current_dir(repo_root)?;
+    }
+    Ok(())
+}
+
+fn git_diff_uncommitted() -> Result<String, Box<dyn std::error::Error>> {
+    let mut diff_context = String::from_utf8(
+        Command::new("git")
+            .args(["diff", "--cached", "--", ".", ":!*.lock"])
+            .output()?
+            .stdout,
+    )?
+    .trim()
+    .to_string();
+
+    if diff_context.is_empty() {
+        diff_context = String::from_utf8(
+            Command::new("git")
+                .args(["diff", "--", ".", ":!*.lock"])
+                .output()?
+                .stdout,
+        )?
+        .trim()
+        .to_string();
     }
 
     if diff_context.is_empty() {
-        diff_context = "Empty context, suggest something creative".to_string();
+        diff_context = "".to_string();
     }
 
     Ok(diff_context)
+}
+
+fn git_diff_between_branches(
+    main_branch: &String,
+    current_branch: &String,
+) -> Result<String, Box<dyn std::error::Error>> {
+    Ok(String::from_utf8(
+        Command::new("git")
+            .args([
+                "diff",
+                &format!("{}...{}", main_branch, current_branch),
+                "--",
+                ":!*.lock",
+            ])
+            .output()?
+            .stdout,
+    )?
+    .trim()
+    .to_string())
 }
 
 fn git_main_branch() -> Result<String, Box<dyn std::error::Error>> {
@@ -160,18 +160,6 @@ fn git_main_branch() -> Result<String, Box<dyn std::error::Error>> {
     Ok(String::from_utf8(main_branch_output.stdout)?
         .trim()
         .to_string())
-}
-
-fn git_upstream_branch() -> Result<String, std::io::Error> {
-    Ok(String::from_utf8(
-        Command::new("git")
-            .args(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
-            .output()?
-            .stdout,
-    )
-    .unwrap()
-    .trim()
-    .to_string())
 }
 
 fn git_current_branch() -> Result<String, std::io::Error> {
@@ -213,6 +201,14 @@ fn stage_and_commit(
         .args(["commit", "-m", &commit_message])
         .status()?;
 
+    Ok(())
+}
+
+fn gh_pr_create(title: &String, body: &String) -> Result<(), Box<dyn std::error::Error>> {
+    // Create a GitHub PR, now that we have a branch and a commit locally
+    Command::new("gh")
+        .args(["pr", "create", "--title", title, "--body", body])
+        .status()?;
     Ok(())
 }
 
