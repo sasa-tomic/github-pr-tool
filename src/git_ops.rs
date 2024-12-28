@@ -299,5 +299,14 @@ pub fn create_or_update_pull_request(
         app.add_log("SUCCESS", "Pull request created successfully");
     }
 
+    // Get and log the PR URL
+    let url_output = Command::new("gh")
+        .args(["pr", "view", "--json", "url", "--jq", ".url"])
+        .output()?;
+    if url_output.status.success() {
+        if let Ok(url) = String::from_utf8(url_output.stdout) {
+            app.add_log("INFO", format!("Pull request URL: {}", url.trim()));
+        }
+    }
     Ok(())
 }
