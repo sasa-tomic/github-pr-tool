@@ -64,6 +64,10 @@ impl<'a> App<'a> {
         self.tabs.previous();
     }
 
+    pub fn switch_to_tab(&mut self, index: usize) {
+        self.tabs.index = index;
+    }
+
     pub fn update_progress(&mut self, value: f64) {
         self.progress = value;
     }

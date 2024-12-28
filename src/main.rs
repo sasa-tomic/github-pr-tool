@@ -147,6 +147,7 @@ async fn run<B: Backend>(
         Ok(diff) => diff,
         Err(err) => {
             app.add_error(err.to_string());
+            app.switch_to_tab(2);
             terminal.draw(|f| ui(f, app))?;
             tokio::time::sleep(Duration::from_secs(2)).await;
             app.should_quit = true;
