@@ -130,11 +130,11 @@ async fn run<B: Backend>(
                 app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
             }
             terminal.draw(|f| ui(f, app))?;
-        }
 
-        git_stage_and_commit(app, &commit_title, &commit_details)?;
-        terminal.draw(|f| ui(f, app))?;
-        current_branch = branch_name;
+            git_stage_and_commit(app, &commit_title, &commit_details)?;
+            current_branch = branch_name;
+            terminal.draw(|f| ui(f, app))?;
+        }
     } else if current_branch == main_branch {
         app.add_log("INFO", "No changes to commit.");
         terminal.draw(|f| ui(f, app))?;
