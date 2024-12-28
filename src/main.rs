@@ -5,28 +5,33 @@ use openai::{
 };
 use ratatui::{
     backend::CrosstermBackend,
-    crossterm::terminal::{disable_raw_mode, enable_raw_mode},
+    crossterm::{
+        terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+        ExecutableCommand,
+    },
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Span, Text},
     widgets::{Block, Borders, Gauge, Paragraph},
     Terminal,
 };
-use std::io;
+use std::io::{self, stdout};
 use std::panic;
 use std::process::Command;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    enable_raw_mode()?;
-    let stdout = io::stdout();
-    let backend = CrosstermBackend::new(stdout);
+    let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
+    enable_raw_mode()?;
+    stdout().execute(EnterAlternateScreen)?;
+    terminal.clear()?;
 
     let default_panic = panic::take_hook();
     panic::set_hook(Box::new(move |info| {
         disable_raw_mode().ok();
-        let _ = Terminal::new(CrosstermBackend::new(io::stdout())).map(|mut terminal| {
+        let _ = Terminal::new(CrosstermBackend::new(stdout())).map(|mut terminal| {
+            let _ = stdout().execute(LeaveAlternateScreen);
             let _ = terminal.show_cursor();
             let _ = terminal.flush();
         });
@@ -36,6 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     terminal.hide_cursor()?;
     let result = run(&mut terminal).await;
 
+    stdout().execute(LeaveAlternateScreen)?;
     disable_raw_mode()?;
     terminal.show_cursor()?;
     terminal.flush()?;
