@@ -125,16 +125,15 @@ async fn run<B: Backend>(
             let output = Command::new("git")
                 .args(["checkout", "-b", &branch_name])
                 .output()?;
+            current_branch = branch_name;
             app.add_log("INFO", String::from_utf8_lossy(&output.stdout).to_string());
             if !output.status.success() {
                 app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
             }
             terminal.draw(|f| ui(f, app))?;
-
-            git_stage_and_commit(app, &commit_title, &commit_details)?;
-            current_branch = branch_name;
-            terminal.draw(|f| ui(f, app))?;
         }
+        git_stage_and_commit(app, &commit_title, &commit_details)?;
+        terminal.draw(|f| ui(f, app))?;
     } else if current_branch == main_branch {
         app.add_log("INFO", "No changes to commit.");
         terminal.draw(|f| ui(f, app))?;
@@ -180,7 +179,7 @@ async fn run<B: Backend>(
     app.update_progress(0.8);
     terminal.draw(|f| ui(f, app))?;
 
-    let _ = create_pull_request(app, &commit_title, &commit_details.unwrap_or_default());
+    let _ = create_or_update_pull_request(app, &commit_title, &commit_details.unwrap_or_default());
     terminal.draw(|f| ui(f, app))?;
 
     app.add_log("SUCCESS", "Pull request created successfully.");
