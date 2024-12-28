@@ -44,7 +44,7 @@ impl<'a> App<'a> {
         App {
             title,
             should_quit: false,
-            tabs: TabsState::new(vec!["Logs", "Progress", "Details", "Status"]),
+            tabs: TabsState::new(vec!["Logs", "Errors", "Progress", "Details", "Status"]),
             logs: vec![],
             errors: vec![],
             progress: 0.0,
@@ -115,9 +115,10 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
 
     match app.tabs.index {
         0 => render_logs(f, app, chunks[2]),
-        1 => render_progress(f, app, chunks[2]),
-        2 => render_details(f, app, chunks[2]),
-        3 => render_status(f, app, chunks[2]),
+        1 => render_errors(f, app, chunks[2]),
+        2 => render_progress(f, app, chunks[2]),
+        3 => render_details(f, app, chunks[2]),
+        4 => render_status(f, app, chunks[2]),
         _ => {}
     }
 }
@@ -167,6 +168,23 @@ fn render_logs(f: &mut ratatui::Frame, app: &App, area: ratatui::layout::Rect) {
         .collect();
     let logs_widget = List::new(logs).block(Block::default().borders(Borders::ALL).title("Logs"));
     f.render_widget(logs_widget, area);
+}
+
+fn render_errors(f: &mut ratatui::Frame, app: &App, area: ratatui::layout::Rect) {
+    let errors: Vec<ListItem> = app
+        .errors
+        .iter()
+        .map(|message| {
+            ListItem::new(Span::styled(
+                message.clone(),
+                Style::default().fg(Color::Red),
+            ))
+        })
+        .collect();
+    let errors_widget = List::new(errors)
+        .block(Block::default().borders(Borders::ALL).title("Errors"))
+        .style(Style::default().fg(Color::Red));
+    f.render_widget(errors_widget, area);
 }
 
 // Renders a pop-up with the given message and progress ratio
