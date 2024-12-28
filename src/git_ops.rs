@@ -98,7 +98,11 @@ pub fn git_diff_between_branches(
 
     if !output.status.success() {
         app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
-        return Err("Failed to get diff between branches".into());
+        return Err(format!(
+            "Failed to get diff between branches: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into());
     }
 
     Ok(String::from_utf8(output.stdout)?.trim().to_string())

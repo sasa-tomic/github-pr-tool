@@ -56,7 +56,6 @@ async fn run<B: Backend>(
 
     // Start UI loop immediately to show initialization progress
     let ui_update = tokio::spawn({
-        let tick_rate = tick_rate;
         let mut last_tick = Instant::now();
         async move {
             loop {
@@ -143,7 +142,8 @@ async fn run<B: Backend>(
         std::process::exit(0);
     }
 
-    let diff_between_branches = git_diff_between_branches(app, &main_branch, &current_branch)?;
+    let diff_between_branches =
+        git_diff_between_branches(app, &main_branch, &current_branch).unwrap_or_default();
     terminal.draw(|f| ui(f, app))?;
 
     if diff_between_branches.is_empty() {
@@ -170,13 +170,7 @@ async fn run<B: Backend>(
     app.update_progress(0.8);
     terminal.draw(|f| ui(f, app))?;
 
-    match create_pull_request(app, &commit_title, &commit_details.unwrap_or_default()) {
-        Ok(_) => (),
-        Err(e) => {
-            app.add_error(format!("Failed to create pull request: {}", e));
-            app.start_error_blink();
-        }
-    };
+    let _ = create_pull_request(app, &commit_title, &commit_details.unwrap_or_default());
     terminal.draw(|f| ui(f, app))?;
 
     app.add_log("SUCCESS", "Pull request created successfully.");

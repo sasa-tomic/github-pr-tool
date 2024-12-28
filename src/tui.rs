@@ -202,41 +202,6 @@ fn render_errors(f: &mut ratatui::Frame, app: &App, area: ratatui::layout::Rect)
     f.render_widget(errors_widget, area);
 }
 
-pub fn render_progress_popup<B: Backend>(
-    terminal: &mut Terminal<B>,
-    message: &str,
-    progress: f64,
-) -> Result<(), io::Error> {
-    terminal.draw(|f| {
-        let area = f.area();
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(80), Constraint::Percentage(20)].as_ref())
-            .split(area);
-
-        let block = Block::default().borders(Borders::ALL).title(Span::styled(
-            "Progress",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ));
-        let paragraph = Paragraph::new(Text::from(message)).block(block);
-        f.render_widget(paragraph, chunks[0]);
-
-        let gauge = Gauge::default()
-            .block(Block::default().borders(Borders::ALL).title("Progress"))
-            .gauge_style(
-                Style::default()
-                    .fg(Color::Green)
-                    .bg(Color::Black)
-                    .add_modifier(Modifier::ITALIC),
-            )
-            .ratio(progress);
-        f.render_widget(gauge, chunks[1]);
-    })?;
-    Ok(())
-}
-
 pub fn render_message<B: Backend>(
     terminal: &mut Terminal<B>,
     title: &str,
