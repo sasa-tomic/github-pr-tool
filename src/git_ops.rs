@@ -228,22 +228,46 @@ pub fn git_push_branch(app: &mut App, branch_name: &str) -> Result<(), Box<dyn s
     Ok(())
 }
 
-pub fn create_pull_request(
+pub fn create_or_update_pull_request(
     app: &mut App,
     title: &str,
     body: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let output = Command::new("gh")
-        .args(["pr", "create", "--title", title, "--body", body])
-        .output()?;
-    if !output.status.success() {
-        app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
-        return Err(format!(
-            "Failed to create pull request: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )
-        .into());
+    // First check if PR already exists
+    let check_output = Command::new("gh").args(["pr", "view"]).output()?;
+
+    if check_output.status.success() {
+        // PR exists, update it
+        app.add_log("INFO", "Existing PR found, updating...");
+        let update_output = Command::new("gh")
+            .args(["pr", "edit", "--title", title, "--body", body])
+            .output()?;
+
+        if !update_output.status.success() {
+            app.add_error(String::from_utf8_lossy(&update_output.stderr).to_string());
+            return Err(format!(
+                "Failed to update pull request: {}",
+                String::from_utf8_lossy(&update_output.stderr)
+            )
+            .into());
+        }
+        app.add_log("SUCCESS", "Pull request updated successfully");
+    } else {
+        // Create new PR
+        let create_output = Command::new("gh")
+            .args(["pr", "create", "--title", title, "--body", body])
+            .output()?;
+
+        if !create_output.status.success() {
+            app.add_error(String::from_utf8_lossy(&create_output.stderr).to_string());
+            return Err(format!(
+                "Failed to create pull request: {}",
+                String::from_utf8_lossy(&create_output.stderr)
+            )
+            .into());
+        }
+        app.add_log("SUCCESS", "Pull request created successfully");
     }
-    app.add_log("SUCCESS", "Pull request created successfully");
+
     Ok(())
 }
