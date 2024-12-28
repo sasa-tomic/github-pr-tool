@@ -79,6 +79,7 @@ async fn run<B: Backend>(
     app.update_progress(0.3);
 
     let diff_uncommitted = git_diff_uncommitted(app)?;
+    terminal.draw(|f| ui(f, app))?;
 
     if !diff_uncommitted.is_empty() {
         app.update_details(diff_uncommitted.clone());
