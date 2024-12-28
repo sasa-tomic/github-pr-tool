@@ -234,7 +234,16 @@ pub fn create_or_update_pull_request(
     body: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // First check if PR already exists
-    let check_output = Command::new("gh").args(["pr", "view"]).output()?;
+    let check_output = Command::new("gh")
+        .args([
+            "pr",
+            "list",
+            "--state",
+            "open",
+            "--head",
+            &git_current_branch(app)?,
+        ])
+        .output()?;
 
     if check_output.status.success() {
         // PR exists, update it
