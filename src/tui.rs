@@ -37,6 +37,8 @@ pub struct App<'a> {
     pub errors: Vec<String>,
     pub progress: f64,
     pub details: String,
+    pub error_tab_blink: bool,
+    pub blink_timer: u8,
 }
 
 impl<'a> App<'a> {
@@ -44,17 +46,15 @@ impl<'a> App<'a> {
         App {
             title,
             should_quit: false,
-            tabs: TabsState::new(vec!["Logs", "Errors", "Progress", "Details", "Status"]),
+            tabs: TabsState::new(vec!["Logs", "Errors", "Details", "Status"]),
             logs: vec![],
             errors: vec![],
             progress: 0.0,
             details: String::new(),
+            error_tab_blink: false,
+            blink_timer: 0,
         }
     }
-
-    // pub fn on_up(&mut self) {}
-
-    // pub fn on_down(&mut self) {}
 
     pub fn on_right(&mut self) {
         self.tabs.next();
@@ -63,12 +63,6 @@ impl<'a> App<'a> {
     pub fn on_left(&mut self) {
         self.tabs.previous();
     }
-
-    // pub fn on_key(&mut self, c: char) {
-    //     if c == 'q' {
-    //         self.should_quit = true;
-    //     }
-    // }
 
     pub fn update_progress(&mut self, value: f64) {
         self.progress = value;
@@ -80,10 +74,25 @@ impl<'a> App<'a> {
 
     pub fn add_error<S: ToString>(&mut self, error: S) {
         self.errors.push(error.to_string());
+        self.start_error_blink();
     }
 
     pub fn update_details(&mut self, details: String) {
         self.details = details;
+    }
+
+    pub fn start_error_blink(&mut self) {
+        self.error_tab_blink = true;
+        self.blink_timer = 10; // Will blink 5 times (10 state changes)
+    }
+
+    pub fn update_blink(&mut self) {
+        if self.error_tab_blink && self.blink_timer > 0 {
+            self.blink_timer -= 1;
+            if self.blink_timer == 0 {
+                self.error_tab_blink = false;
+            }
+        }
     }
 }
 
@@ -94,6 +103,7 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
             Constraint::Length(3),
             Constraint::Length(3),
             Constraint::Min(0),
+            Constraint::Length(3),
         ])
         .split(f.area());
 
@@ -101,7 +111,14 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
         app.tabs
             .titles
             .iter()
-            .map(|t| Span::styled(*t, Style::default().fg(Color::Green)))
+            .enumerate()
+            .map(|(i, t)| {
+                if i == 1 && app.error_tab_blink && (app.blink_timer % 2 == 0) {
+                    Span::styled(*t, Style::default().fg(Color::Red))
+                } else {
+                    Span::styled(*t, Style::default().fg(Color::Green))
+                }
+            })
             .collect::<Vec<_>>(),
     )
     .block(Block::default().borders(Borders::ALL).title(app.title))
@@ -113,18 +130,16 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
     );
     f.render_widget(tabs, chunks[0]);
 
+    app.update_blink();
+
     match app.tabs.index {
         0 => render_logs(f, app, chunks[2]),
         1 => render_errors(f, app, chunks[2]),
-        2 => render_progress(f, app, chunks[2]),
-        3 => render_details(f, app, chunks[2]),
-        4 => render_status(f, app, chunks[2]),
+        2 => render_details(f, app, chunks[2]),
+        3 => render_status(f, app, chunks[2]),
         _ => {}
     }
-}
 
-// This function displays progress (a gauge) in the main UI
-fn render_progress(f: &mut ratatui::Frame, app: &App, area: ratatui::layout::Rect) {
     let gauge = Gauge::default()
         .block(Block::default().borders(Borders::ALL).title("Progress"))
         .gauge_style(
@@ -134,7 +149,7 @@ fn render_progress(f: &mut ratatui::Frame, app: &App, area: ratatui::layout::Rec
                 .add_modifier(Modifier::ITALIC),
         )
         .ratio(app.progress);
-    f.render_widget(gauge, area);
+    f.render_widget(gauge, chunks[3]);
 }
 
 fn render_details(f: &mut ratatui::Frame, app: &App, area: ratatui::layout::Rect) {
@@ -187,7 +202,6 @@ fn render_errors(f: &mut ratatui::Frame, app: &App, area: ratatui::layout::Rect)
     f.render_widget(errors_widget, area);
 }
 
-// Renders a pop-up with the given message and progress ratio
 pub fn render_progress_popup<B: Backend>(
     terminal: &mut Terminal<B>,
     message: &str,

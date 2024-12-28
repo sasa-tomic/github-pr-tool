@@ -170,7 +170,13 @@ async fn run<B: Backend>(
     app.update_progress(0.8);
     terminal.draw(|f| ui(f, app))?;
 
-    create_pull_request(app, &commit_title, &commit_details.unwrap_or_default())?;
+    match create_pull_request(app, &commit_title, &commit_details.unwrap_or_default()) {
+        Ok(_) => (),
+        Err(e) => {
+            app.add_error(format!("Failed to create pull request: {}", e));
+            app.start_error_blink();
+        }
+    };
     terminal.draw(|f| ui(f, app))?;
 
     app.add_log("SUCCESS", "Pull request created successfully.");

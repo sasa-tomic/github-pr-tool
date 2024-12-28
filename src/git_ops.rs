@@ -234,7 +234,11 @@ pub fn create_pull_request(
         .output()?;
     if !output.status.success() {
         app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
-        return Err("Failed to create pull request".into());
+        return Err(format!(
+            "Failed to create pull request: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into());
     }
     app.add_log("SUCCESS", "Pull request created successfully");
     Ok(())
