@@ -245,7 +245,10 @@ pub fn create_or_update_pull_request(
         ])
         .output()?;
 
-    if check_output.status.success() {
+    if check_output.status.success()
+        && !String::from_utf8(check_output.stdout)?
+            .starts_with("no pull requests match your search")
+    {
         // PR exists, update it
         app.add_log("INFO", "Existing PR found, updating...");
         let update_output = Command::new("gh")
