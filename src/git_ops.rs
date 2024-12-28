@@ -240,7 +240,16 @@ pub fn create_or_update_pull_request(
         // PR exists, update it
         app.add_log("INFO", "Existing PR found, updating...");
         let update_output = Command::new("gh")
-            .args(["pr", "edit", "--title", title, "--body", body])
+            .args([
+                "pr",
+                "edit",
+                "--title",
+                title,
+                "--body",
+                body,
+                "--assignee",
+                "@me",
+            ])
             .output()?;
 
         if !update_output.status.success() {
@@ -255,7 +264,16 @@ pub fn create_or_update_pull_request(
     } else {
         // Create new PR
         let create_output = Command::new("gh")
-            .args(["pr", "create", "--title", title, "--body", body])
+            .args([
+                "pr",
+                "create",
+                "--title",
+                title,
+                "--body",
+                body,
+                "--assignee",
+                "@me",
+            ])
             .output()?;
 
         if !create_output.status.success() {
