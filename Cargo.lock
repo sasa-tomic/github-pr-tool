@@ -422,6 +422,7 @@ name = "gh-autopr"
 version = "0.1.0"
 dependencies = [
  "env_logger",
+ "keyring",
  "log",
  "openai",
  "ratatui",
@@ -755,6 +756,15 @@ checksum = "6717b6b5b077764fb5966237269cb3c64edddde4b14ce42647430a78ced9e7b7"
 dependencies = [
  "once_cell",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "keyring"
+version = "3.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f8fe839464d4e4b37d756d7e910063696af79a7e877282cb1825e4ec5f10833"
+dependencies = [
+ "log",
 ]
 
 [[package]]

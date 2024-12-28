@@ -70,12 +70,40 @@ async fn run<B: Backend>(
     // Initial UI render
     terminal.draw(|f| ui(f, app))?;
 
-    if std::env::var("OPENAI_KEY").is_err() {
-        app.add_log("ERROR", "Environment variable OPENAI_KEY is not set.");
-        terminal.draw(|f| ui(f, app))?;
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        std::process::exit(1);
-    }
+    let api_key = match keyring::Entry::new("gh-autopr", "openai_key") {
+        Ok(entry) => match entry.get_password() {
+            Ok(key) => {
+                app.add_log("INFO", "Found OpenAI key in keyring");
+                key
+            }
+            Err(_) => match std::env::var("OPENAI_KEY") {
+                Ok(key) => {
+                    app.add_log(
+                        "INFO",
+                        "Found OpenAI key in environment, storing in keyring",
+                    );
+                    if let Err(e) = entry.set_password(&key) {
+                        app.add_error(format!("Failed to store key in keyring: {}", e));
+                    }
+                    key
+                }
+                Err(_) => {
+                    app.add_error("OpenAI key not found in keyring or environment");
+                    terminal.draw(|f| ui(f, app))?;
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    std::process::exit(1);
+                }
+            },
+        },
+        Err(_) => {
+            app.add_error("Failed to access keyring");
+            app.switch_to_tab(1);
+            terminal.draw(|f| ui(f, app))?;
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            std::process::exit(1);
+        }
+    };
+    std::env::set_var("OPENAI_KEY", api_key);
 
     // Initialize OpenAI and GitHub logic
     app.add_log("INFO", "Initializing...");
