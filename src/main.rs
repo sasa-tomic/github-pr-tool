@@ -13,6 +13,7 @@ use ratatui::{
     Terminal,
 };
 use std::io;
+use std::panic;
 use std::process::Command;
 
 #[tokio::main]
@@ -22,9 +23,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
+    let default_panic = panic::take_hook();
+    panic::set_hook(Box::new(move |info| {
+        disable_raw_mode().ok();
+        let _ = Terminal::new(CrosstermBackend::new(io::stdout())).map(|mut terminal| {
+            let _ = terminal.show_cursor();
+        });
+        default_panic(info);
+    }));
+
+    let result = run(&mut terminal).await;
+
+    disable_raw_mode()?;
+    terminal.show_cursor()?;
+    result
+}
+
+async fn run(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+) -> Result<(), Box<dyn std::error::Error>> {
     if std::env::var("OPENAI_KEY").is_err() {
         render_message(
-            &mut terminal,
+            terminal,
             "Error",
             "Environment variable OPENAI_KEY is not set.",
             Color::Red,
@@ -39,7 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if main_branch.is_empty() {
         render_message(
-            &mut terminal,
+            terminal,
             "Error",
             "Unable to determine the upstream main branch.",
             Color::Red,
@@ -48,12 +68,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut current_branch = git_current_branch()?;
-    git_ensure_not_detached_head(&mut terminal, &current_branch)?;
+    git_ensure_not_detached_head(terminal, &current_branch)?;
 
     git_fetch_main(&current_branch, &main_branch)?;
 
     render_message(
-        &mut terminal,
+        terminal,
         "Info",
         &format!(
             "Main branch: {}, current branch: {}",
@@ -65,7 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let diff_uncommitted = git_diff_uncommitted()?;
 
     if !diff_uncommitted.is_empty() {
-        render_progress(&mut terminal, "Staging and committing changes...", 0.5)?;
+        render_progress(terminal, "Staging and committing changes...", 0.5)?;
 
         let (branch_name, commit_title, commit_details) =
             gpt_generate_branch_name_and_commit_description(diff_uncommitted).await?;
@@ -79,14 +99,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         git_stage_and_commit(&commit_title, &commit_details)?;
         current_branch = branch_name;
     } else if current_branch == main_branch {
-        render_message(&mut terminal, "Info", "No changes to commit.", Color::Cyan)?;
+        render_message(terminal, "Info", "No changes to commit.", Color::Cyan)?;
         std::process::exit(0);
     }
 
     let diff_between_branches = git_diff_between_branches(&main_branch, &current_branch)?;
     if diff_between_branches.is_empty() {
         render_message(
-            &mut terminal,
+            terminal,
             "Info",
             "No changes between the branches.",
             Color::Cyan,
@@ -94,7 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(0);
     }
 
-    render_progress(&mut terminal, "Creating a pull request...", 0.8)?;
+    render_progress(terminal, "Creating a pull request...", 0.8)?;
 
     let (_, commit_title, commit_details) =
         gpt_generate_branch_name_and_commit_description(diff_between_branches).await?;
@@ -102,13 +122,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     gh_pr_create(&commit_title, &commit_details.unwrap_or_default())?;
 
     render_message(
-        &mut terminal,
+        terminal,
         "Success",
         "Pull request created successfully.",
         Color::Green,
     )?;
 
-    disable_raw_mode()?;
     Ok(())
 }
 
