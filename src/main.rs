@@ -3,14 +3,32 @@ use openai::{
     chat::{ChatCompletion, ChatCompletionMessage, ChatCompletionMessageRole},
     Credentials,
 };
+use ratatui::{
+    backend::CrosstermBackend,
+    crossterm::terminal::{disable_raw_mode, enable_raw_mode},
+    layout::{Constraint, Direction, Layout},
+    style::{Color, Modifier, Style},
+    text::{Span, Text},
+    widgets::{Block, Borders, Gauge, Paragraph},
+    Terminal,
+};
+use std::io;
 use std::process::Command;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    init_logger();
-    // Ensure the OpenAI key is set
+    enable_raw_mode()?;
+    let stdout = io::stdout();
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
     if std::env::var("OPENAI_KEY").is_err() {
-        error!("Environment variable OPENAI_KEY is not set.");
+        render_message(
+            &mut terminal,
+            "Error",
+            "Environment variable OPENAI_KEY is not set.",
+            Color::Red,
+        )?;
         std::process::exit(1);
     }
 
@@ -20,29 +38,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let main_branch = git_main_branch().unwrap_or_else(|_| "main".to_string());
 
     if main_branch.is_empty() {
-        error!("Unable to determine the upstream main branch.");
+        render_message(
+            &mut terminal,
+            "Error",
+            "Unable to determine the upstream main branch.",
+            Color::Red,
+        )?;
         std::process::exit(1);
     }
 
     let mut current_branch = git_current_branch()?;
-    git_ensure_not_detached_head(&current_branch)?;
+    git_ensure_not_detached_head(&mut terminal, &current_branch)?;
 
     git_fetch_main(&current_branch, &main_branch)?;
 
-    info!(
-        "Main branch: {}, current branch: {}",
-        main_branch, current_branch
-    );
+    render_message(
+        &mut terminal,
+        "Info",
+        &format!(
+            "Main branch: {}, current branch: {}",
+            main_branch, current_branch
+        ),
+        Color::Cyan,
+    )?;
 
     let diff_uncommitted = git_diff_uncommitted()?;
 
     if !diff_uncommitted.is_empty() {
-        // We have uncommitted changes, let's stage and commit them
+        render_progress(&mut terminal, "Staging and committing changes...", 0.5)?;
+
         let (branch_name, commit_title, commit_details) =
             gpt_generate_branch_name_and_commit_description(diff_uncommitted).await?;
 
         if current_branch == main_branch {
-            // Create a new branch
             Command::new("git")
                 .args(["checkout", "-b", &branch_name])
                 .status()?;
@@ -51,29 +79,90 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         git_stage_and_commit(&commit_title, &commit_details)?;
         current_branch = branch_name;
     } else if current_branch == main_branch {
-        info!("No changes to commit.");
+        render_message(&mut terminal, "Info", "No changes to commit.", Color::Cyan)?;
         std::process::exit(0);
     }
 
-    // Let's check if we have any changes between the branches
     let diff_between_branches = git_diff_between_branches(&main_branch, &current_branch)?;
     if diff_between_branches.is_empty() {
-        info!("No changes between the branches.");
+        render_message(
+            &mut terminal,
+            "Info",
+            "No changes between the branches.",
+            Color::Cyan,
+        )?;
         std::process::exit(0);
     }
-    // Let's come up with a nice PR title and description
+
+    render_progress(&mut terminal, "Creating a pull request...", 0.8)?;
+
     let (_, commit_title, commit_details) =
         gpt_generate_branch_name_and_commit_description(diff_between_branches).await?;
     git_push_branch(&current_branch)?;
     gh_pr_create(&commit_title, &commit_details.unwrap_or_default())?;
 
+    render_message(
+        &mut terminal,
+        "Success",
+        "Pull request created successfully.",
+        Color::Green,
+    )?;
+
+    disable_raw_mode()?;
     Ok(())
 }
 
-fn init_logger() {
-    // default log level is INFO
-    let log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(log_level)).init();
+fn render_message(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    title: &str,
+    message: &str,
+    color: Color,
+) -> Result<(), io::Error> {
+    terminal.draw(|f| {
+        let area = f.area();
+        let block = Block::default().borders(Borders::ALL).title(Span::styled(
+            title,
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ));
+        let paragraph = Paragraph::new(Text::from(message)).block(block);
+        f.render_widget(paragraph, area);
+    })?;
+    Ok(())
+}
+
+fn render_progress(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    message: &str,
+    progress: f64,
+) -> Result<(), io::Error> {
+    terminal.draw(|f| {
+        let area = f.size();
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(80), Constraint::Percentage(20)].as_ref())
+            .split(area);
+
+        let block = Block::default().borders(Borders::ALL).title(Span::styled(
+            "Progress",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ));
+        let paragraph = Paragraph::new(Text::from(message)).block(block);
+        f.render_widget(paragraph, chunks[0]);
+
+        let gauge = Gauge::default()
+            .block(Block::default().borders(Borders::ALL).title("Progress"))
+            .gauge_style(
+                Style::default()
+                    .fg(Color::Green)
+                    .bg(Color::Black)
+                    .add_modifier(Modifier::ITALIC),
+            )
+            .ratio(progress);
+        f.render_widget(gauge, chunks[1]);
+    })?;
+    Ok(())
 }
 
 fn git_ensure_in_repo() -> Result<(), Box<dyn std::error::Error>> {
@@ -87,9 +176,17 @@ fn git_ensure_in_repo() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn git_ensure_not_detached_head(branch_name: &String) -> Result<(), Box<dyn std::error::Error>> {
+fn git_ensure_not_detached_head(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    branch_name: &String,
+) -> Result<(), Box<dyn std::error::Error>> {
     if branch_name == "HEAD" {
-        error!("Detached HEAD state detected. Please check out a branch.");
+        render_message(
+            terminal,
+            "Error",
+            "Detached HEAD state detected. Please check out a branch.",
+            Color::Red,
+        )?;
         std::process::exit(1);
     }
     Ok(())
