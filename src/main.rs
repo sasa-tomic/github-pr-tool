@@ -28,14 +28,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         disable_raw_mode().ok();
         let _ = Terminal::new(CrosstermBackend::new(io::stdout())).map(|mut terminal| {
             let _ = terminal.show_cursor();
+            let _ = terminal.flush();
         });
         default_panic(info);
     }));
 
+    terminal.hide_cursor()?;
     let result = run(&mut terminal).await;
 
     disable_raw_mode()?;
     terminal.show_cursor()?;
+    terminal.flush()?;
     result
 }
 
