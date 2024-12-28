@@ -136,7 +136,7 @@ fn render_progress(
     progress: f64,
 ) -> Result<(), io::Error> {
     terminal.draw(|f| {
-        let area = f.size();
+        let area = f.area();
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Percentage(80), Constraint::Percentage(20)].as_ref())
