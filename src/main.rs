@@ -53,8 +53,27 @@ async fn run<B: Backend>(
     tick_rate: Duration,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut last_tick = Instant::now();
+
+    // Start UI loop immediately to show initialization progress
+    let ui_update = tokio::spawn({
+        let tick_rate = tick_rate;
+        let mut last_tick = Instant::now();
+        async move {
+            loop {
+                tokio::time::sleep(tick_rate).await;
+                if last_tick.elapsed() >= tick_rate {
+                    last_tick = Instant::now();
+                }
+            }
+        }
+    });
+
+    // Initial UI render
+    terminal.draw(|f| ui(f, app))?;
+
     if std::env::var("OPENAI_KEY").is_err() {
         app.add_log("ERROR", "Environment variable OPENAI_KEY is not set.");
+        terminal.draw(|f| ui(f, app))?;
         tokio::time::sleep(Duration::from_secs(2)).await;
         std::process::exit(1);
     }
@@ -62,31 +81,46 @@ async fn run<B: Backend>(
     // Initialize OpenAI and GitHub logic
     app.add_log("INFO", "Initializing...");
     app.update_progress(0.1);
+    terminal.draw(|f| ui(f, app))?;
 
     git_ensure_in_repo(app)?;
+    terminal.draw(|f| ui(f, app))?;
+
     git_cd_to_repo_root(app)?;
+    terminal.draw(|f| ui(f, app))?;
 
     let main_branch = git_main_branch(app).unwrap_or_else(|_| "main".to_string());
+    terminal.draw(|f| ui(f, app))?;
+
     let mut current_branch = git_current_branch(app)?;
+    terminal.draw(|f| ui(f, app))?;
+
     git_ensure_not_detached_head(terminal, app, &current_branch)?;
+    terminal.draw(|f| ui(f, app))?;
 
     git_fetch_main(app, &current_branch, &main_branch)?;
+    terminal.draw(|f| ui(f, app))?;
 
     app.add_log(
         "INFO",
         format!("Main branch: {main_branch}, Current branch: {current_branch}"),
     );
     app.update_progress(0.3);
+    terminal.draw(|f| ui(f, app))?;
 
     let diff_uncommitted = git_diff_uncommitted(app)?;
     terminal.draw(|f| ui(f, app))?;
 
     if !diff_uncommitted.is_empty() {
         app.update_details(diff_uncommitted.clone());
-        render_progress_popup(terminal, "Staging and committing changes...", 0.5)?;
+        terminal.draw(|f| ui(f, app))?;
+
+        app.add_log("INFO", "Generating branch name and commit description...");
+        terminal.draw(|f| ui(f, app))?;
 
         let (branch_name, commit_title, commit_details) =
             gpt_generate_branch_name_and_commit_description(app, diff_uncommitted).await?;
+        terminal.draw(|f| ui(f, app))?;
 
         if current_branch == main_branch {
             let output = Command::new("git")
@@ -96,39 +130,55 @@ async fn run<B: Backend>(
             if !output.status.success() {
                 app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
             }
+            terminal.draw(|f| ui(f, app))?;
         }
 
         git_stage_and_commit(app, &commit_title, &commit_details)?;
+        terminal.draw(|f| ui(f, app))?;
         current_branch = branch_name;
     } else if current_branch == main_branch {
+        app.add_log("INFO", "No changes to commit.");
+        terminal.draw(|f| ui(f, app))?;
         render_message(terminal, "Info", "No changes to commit.", Color::Cyan)?;
         std::process::exit(0);
     }
 
     let diff_between_branches = git_diff_between_branches(app, &main_branch, &current_branch)?;
+    terminal.draw(|f| ui(f, app))?;
+
     if diff_between_branches.is_empty() {
         app.add_log("INFO", "No changes between the branches.");
+        terminal.draw(|f| ui(f, app))?;
         tokio::time::sleep(Duration::from_secs(2)).await;
         app.should_quit = true;
         std::process::exit(0);
     }
 
-    render_progress_popup(terminal, "Creating a pull request...", 0.8)?;
-
     app.add_log("INFO", "Generating PR details using AI...");
     app.update_progress(0.5);
+    terminal.draw(|f| ui(f, app))?;
+
     let (_, commit_title, commit_details) =
         gpt_generate_branch_name_and_commit_description(app, diff_between_branches).await?;
+    terminal.draw(|f| ui(f, app))?;
+
     git_push_branch(app, &current_branch)?;
+    terminal.draw(|f| ui(f, app))?;
 
     app.add_log("INFO", format!("Commit title: {commit_title}"));
     app.add_log("INFO", "Creating pull request...");
     app.update_progress(0.8);
+    terminal.draw(|f| ui(f, app))?;
 
     create_pull_request(app, &commit_title, &commit_details.unwrap_or_default())?;
+    terminal.draw(|f| ui(f, app))?;
 
     app.add_log("SUCCESS", "Pull request created successfully.");
     app.update_progress(1.0);
+    terminal.draw(|f| ui(f, app))?;
+
+    // Cancel the UI update task
+    ui_update.abort();
 
     loop {
         terminal.draw(|f| ui(f, app))?;
