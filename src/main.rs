@@ -142,8 +142,17 @@ async fn run<B: Backend>(
         std::process::exit(0);
     }
 
-    let diff_between_branches =
-        git_diff_between_branches(app, &main_branch, &current_branch).unwrap_or_default();
+    let diff_between_branches = match git_diff_between_branches(app, &main_branch, &current_branch)
+    {
+        Ok(diff) => diff,
+        Err(err) => {
+            app.add_error(err.to_string());
+            terminal.draw(|f| ui(f, app))?;
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            app.should_quit = true;
+            std::process::exit(0);
+        }
+    };
     terminal.draw(|f| ui(f, app))?;
 
     if diff_between_branches.is_empty() {
