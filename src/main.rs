@@ -172,8 +172,11 @@ async fn run<B: Backend>(
         terminal.draw(|f| ui(f, app))?;
     } else if current_branch == main_branch {
         app.add_log("INFO", "No changes to commit.");
-        terminal.draw(|f| ui(f, app))?;
         render_message(terminal, "Info", "No changes to commit.", Color::Cyan)?;
+        app.update_progress(1.0);
+        terminal.draw(|f| ui(f, app))?;
+        ui_update.abort();
+        run_event_loop(terminal, app, tick_rate, &mut last_tick)?;
         return Ok(());
     }
 
@@ -238,7 +241,16 @@ async fn run<B: Backend>(
 
     // Cancel the UI progress-update task
     ui_update.abort();
+    run_event_loop(terminal, app, tick_rate, &mut last_tick)?;
+    Ok(())
+}
 
+fn run_event_loop<B: Backend>(
+    terminal: &mut Terminal<B>,
+    app: &mut App<'_>,
+    tick_rate: Duration,
+    last_tick: &mut Instant,
+) -> Result<(), Box<dyn std::error::Error>> {
     loop {
         terminal.draw(|f| ui(f, app))?;
 
@@ -257,7 +269,7 @@ async fn run<B: Backend>(
         }
 
         if last_tick.elapsed() >= tick_rate {
-            last_tick = Instant::now();
+            *last_tick = Instant::now();
         }
 
         if app.should_quit {
