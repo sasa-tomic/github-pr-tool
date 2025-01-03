@@ -92,6 +92,7 @@ pub fn git_diff_between_branches(
             "diff",
             &format!("{}...{}", main_branch, current_branch),
             "--",
+            ".",
             ":!*.lock",
         ])
         .output()?;
