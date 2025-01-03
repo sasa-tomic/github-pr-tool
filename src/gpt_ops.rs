@@ -50,7 +50,14 @@ pub async fn gpt_generate_branch_name_and_commit_description(
 
     app.add_log("INFO", format!("chat_response: {}", chat_response));
     // Parse the JSON response
-    let parsed_response: serde_json::Value = serde_json::from_str(&chat_response)?;
+    let parsed_response: serde_json::Value = match serde_json::from_str(&chat_response) {
+        Ok(value) => value,
+        Err(err) => {
+            app.add_error(err.to_string());
+            app.switch_to_tab(1);
+            return Err(err.into());
+        }
+    };
     let branch_name = parsed_response["branch_name"]
         .as_str()
         .unwrap_or("my-pr-branch")
