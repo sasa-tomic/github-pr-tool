@@ -106,7 +106,7 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
-            Constraint::Length(3),
+            Constraint::Length(1),
             Constraint::Min(0),
             Constraint::Length(3),
         ])
@@ -134,6 +134,9 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
             .add_modifier(Modifier::BOLD),
     );
     f.render_widget(tabs, chunks[0]);
+
+    let help = Paragraph::new("Press 'q' to quit").style(Style::default().fg(Color::Gray));
+    f.render_widget(help, chunks[1]);
 
     app.update_blink();
 
