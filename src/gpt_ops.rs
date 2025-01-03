@@ -13,7 +13,16 @@ pub async fn gpt_generate_branch_name_and_commit_description(
         ChatCompletionMessage {
             role: ChatCompletionMessageRole::System,
             content: Some(
-                "You are a helpful assistant that helps to prepare GitHub PRs. You will provide output in JSON format with keys: 'branch_name', 'commit_title', and 'commit_details'. For a very small PR return 'commit_details' as null, otherwise humbly and politely in a well structured markdown format describe all changes in the PR. Do not describe the impact unless there is a breaking change. Follow the Conventional Commits specification for formatting PR descriptions.".to_string(),
+                "You are a helpful assistant that helps to prepare GitHub PRs.
+                You will provide output in JSON format with keys: 'branch_name', 'commit_title', and 'commit_details'.
+                For a very small PR return 'commit_details' as null, otherwise humbly and politely in a well structured markdown format describe all changes in the PR.
+                Do not describe the impact unless there is a breaking change.
+                Follow the Conventional Commits specification for formatting PR descriptions.
+                Please write in a concise and professional style, prioritizing action-oriented verbs over longer descriptive phrases. For example:
+                Use \"extends functionality\" instead of \"introduces enhancements to functionality\".
+                Use \"updates\" instead of \"makes modifications\".
+                Use \"supports\" instead of \"provides support for\".
+                Ensure clarity while avoiding redundant or overly elaborate expressions.".to_string(),
             ),
             ..Default::default()
         },
