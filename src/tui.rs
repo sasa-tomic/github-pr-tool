@@ -46,7 +46,7 @@ impl<'a> App<'a> {
         App {
             title,
             should_quit: false,
-            tabs: TabsState::new(vec!["Logs", "Errors", "Details", "Status"]),
+            tabs: TabsState::new(vec!["Logs", "Errors", "Details"]),
             logs: vec![],
             errors: vec![],
             progress: 0.0,
@@ -141,7 +141,6 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
         0 => render_logs(f, app, chunks[2]),
         1 => render_errors(f, app, chunks[2]),
         2 => render_details(f, app, chunks[2]),
-        3 => render_status(f, app, chunks[2]),
         _ => {}
     }
 
@@ -160,13 +159,6 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
 fn render_details(f: &mut ratatui::Frame, app: &App, area: ratatui::layout::Rect) {
     let paragraph = Paragraph::new(Text::from(app.details.clone()))
         .block(Block::default().borders(Borders::ALL).title("Details"));
-    f.render_widget(paragraph, area);
-}
-
-fn render_status(f: &mut ratatui::Frame, _app: &App, area: ratatui::layout::Rect) {
-    let status_message = "All systems operational."; // Example status
-    let paragraph = Paragraph::new(Text::from(status_message))
-        .block(Block::default().borders(Borders::ALL).title("Status"));
     f.render_widget(paragraph, area);
 }
 
