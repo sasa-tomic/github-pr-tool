@@ -32,7 +32,7 @@ pub fn git_ensure_not_detached_head<B: Backend>(
             "Detached HEAD state detected. Please check out a branch.",
             Color::Red,
         )?;
-        std::process::exit(1);
+        return Err("Detached HEAD state detected".into());
     }
     Ok(())
 }

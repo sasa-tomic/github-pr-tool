@@ -94,20 +94,20 @@ async fn run<B: Backend>(
                     }
                     key
                 }
-                Err(_) => {
+                Err(e) => {
                     app.add_error("OpenAI key not found in keyring or environment");
                     terminal.draw(|f| ui(f, app))?;
                     tokio::time::sleep(Duration::from_secs(2)).await;
-                    std::process::exit(1);
+                    return Err(e.into());
                 }
             },
         },
-        Err(_) => {
+        Err(e) => {
             app.add_error("Failed to access keyring");
             app.switch_to_tab(1);
             terminal.draw(|f| ui(f, app))?;
             tokio::time::sleep(Duration::from_secs(2)).await;
-            std::process::exit(1);
+            return Err(e.into());
         }
     };
     std::env::set_var("OPENAI_KEY", api_key);
@@ -174,7 +174,7 @@ async fn run<B: Backend>(
         app.add_log("INFO", "No changes to commit.");
         terminal.draw(|f| ui(f, app))?;
         render_message(terminal, "Info", "No changes to commit.", Color::Cyan)?;
-        std::process::exit(0);
+        return Ok(());
     }
 
     let diff_between_branches = match git_diff_between_branches(app, &main_branch, &current_branch)
@@ -186,7 +186,7 @@ async fn run<B: Backend>(
             terminal.draw(|f| ui(f, app))?;
             tokio::time::sleep(Duration::from_secs(2)).await;
             app.should_quit = true;
-            std::process::exit(0);
+            return Err(err);
         }
     };
     terminal.draw(|f| ui(f, app))?;
@@ -196,7 +196,7 @@ async fn run<B: Backend>(
         terminal.draw(|f| ui(f, app))?;
         tokio::time::sleep(Duration::from_secs(2)).await;
         app.should_quit = true;
-        std::process::exit(0);
+        return Ok(());
     }
 
     app.add_log("INFO", "Generating PR details using AI...");
