@@ -40,8 +40,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     terminal.show_cursor()?;
 
-    if let Err(err) = app_result {
-        println!("{err:?}");
+    if let Err(e) = app_result {
+        eprintln!("ERROR in execution: {}", e);
+        // Print logs and errors after terminal is restored
+        for (log_level, log_message) in &app.logs {
+            println!("{}: {}", log_level, log_message);
+        }
+        for error in &app.errors {
+            eprintln!("ERROR: {}", error);
+        }
     }
 
     Ok(())
@@ -198,6 +205,14 @@ async fn run<B: Backend>(
 
     let (_, commit_title, commit_details) =
         gpt_generate_branch_name_and_commit_description(app, diff_between_branches).await?;
+    app.add_log("INFO", format!("Commit title: {commit_title}"));
+    app.add_log(
+        "INFO",
+        format!(
+            "Commit details: {}",
+            commit_details.clone().unwrap_or_default()
+        ),
+    );
     terminal.draw(|f| ui(f, app))?;
 
     git_push_branch(app, &current_branch)?;
@@ -221,7 +236,7 @@ async fn run<B: Backend>(
     git_pull_branch(app, &original_branch)?;
     terminal.draw(|f| ui(f, app))?;
 
-    // Cancel the UI update task
+    // Cancel the UI progress-update task
     ui_update.abort();
 
     loop {
