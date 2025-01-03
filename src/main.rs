@@ -42,13 +42,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if let Err(e) = app_result {
         eprintln!("ERROR in execution: {}", e);
-        // Print logs and errors after terminal is restored
-        for (log_level, log_message) in &app.logs {
-            println!("{}: {}", log_level, log_message);
-        }
-        for error in &app.errors {
-            eprintln!("ERROR: {}", error);
-        }
+    }
+    // Print logs and errors after terminal is restored
+    for (log_level, log_message) in &app.logs {
+        println!("{}: {}", log_level, log_message);
+    }
+    for error in &app.errors {
+        eprintln!("ERROR: {}", error);
     }
 
     Ok(())
