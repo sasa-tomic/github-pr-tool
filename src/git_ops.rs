@@ -188,6 +188,37 @@ pub fn git_fetch_main(
     Ok(())
 }
 
+pub fn git_checkout_branch(
+    app: &mut App,
+    branch_name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let output = Command::new("git")
+        .args(["checkout", branch_name])
+        .output()?;
+
+    if !output.status.success() {
+        app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
+        return Err("Failed to checkout branch".into());
+    }
+
+    app.add_log("INFO", format!("Checked out branch: {}", branch_name));
+    Ok(())
+}
+
+pub fn git_pull_branch(app: &mut App, branch_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let output = Command::new("git")
+        .args(["pull", "origin", branch_name])
+        .output()?;
+
+    if !output.status.success() {
+        app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
+        return Err("Failed to pull branch".into());
+    }
+
+    app.add_log("INFO", format!("Pulled branch: {}", branch_name));
+    Ok(())
+}
+
 pub fn git_stage_and_commit(
     app: &mut App,
     commit_title: &str,

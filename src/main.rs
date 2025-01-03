@@ -120,6 +120,7 @@ async fn run<B: Backend>(
     terminal.draw(|f| ui(f, app))?;
 
     let mut current_branch = git_current_branch(app)?;
+    let original_branch = current_branch.clone();
     terminal.draw(|f| ui(f, app))?;
 
     git_ensure_not_detached_head(terminal, app, &current_branch)?;
@@ -212,6 +213,12 @@ async fn run<B: Backend>(
 
     app.add_log("SUCCESS", "Pull request created successfully.");
     app.update_progress(1.0);
+    terminal.draw(|f| ui(f, app))?;
+
+    git_checkout_branch(app, &original_branch)?;
+    terminal.draw(|f| ui(f, app))?;
+
+    git_pull_branch(app, &original_branch)?;
     terminal.draw(|f| ui(f, app))?;
 
     // Cancel the UI update task
