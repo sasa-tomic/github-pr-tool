@@ -18,11 +18,15 @@ pub async fn gpt_generate_branch_name_and_commit_description(
                 For a very small PR return 'commit_details' as null, otherwise humbly and politely in a well structured markdown format describe all changes in the PR.
                 Do not describe the impact unless there is a breaking change.
                 Follow the Conventional Commits specification for formatting PR descriptions.
-                Please write in a concise and professional style, prioritizing action-oriented verbs over longer descriptive phrases. For example:
+                Please write in a HIGHLY CONCISE and professional style, prioritizing action-oriented verbs over longer descriptive phrases. For example:
                 Use \"extends functionality\" instead of \"introduces enhancements to functionality\".
                 Use \"updates\" instead of \"makes modifications\".
                 Use \"supports\" instead of \"provides support for\".
-                Ensure clarity while avoiding redundant or overly elaborate expressions.".to_string(),
+                Do not use *enhanced* or similar words in the descriptions, unless such statements are explicitly provided in the diff.
+                Do not make statements that are not directly supported by the diff. For example, do not say \"this change will improve performance\" unless the diff clearly shows or claims that.
+                Do not provide details on the comment or test changes unless they are significant, just provide a very concise high-level overview for such changes such as \"updated tests\" or \"updated comments\".
+                Ensure clarity by avoiding redundant or overly elaborate expressions. Be concise and to the point.
+                ".to_string(),
             ),
             ..Default::default()
         },
