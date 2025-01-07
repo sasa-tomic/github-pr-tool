@@ -156,13 +156,6 @@ async fn run<B: Backend>(
 
         if current_branch == main_branch {
             git_checkout_new_branch(app, &branch_name, false)?;
-            let output = Command::new("git")
-                .args(["checkout", "-b", &branch_name])
-                .output()?;
-            app.add_log("INFO", String::from_utf8_lossy(&output.stdout).to_string());
-            if !output.status.success() {
-                app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
-            }
             current_branch = branch_name;
             terminal.draw(|f| ui(f, app))?;
         }
