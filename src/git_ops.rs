@@ -224,12 +224,13 @@ pub fn git_stage_and_commit(
     commit_title: &str,
     commit_details: &Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let check_output = Command::new("git")
+    let check_git_cached_changes = Command::new("git")
         .args(["diff", "--cached", "--quiet"])
         .output()?;
 
-    let git_no_staged_changes = check_output.status.success();
+    let git_no_staged_changes = check_git_cached_changes.status.success();
     if git_no_staged_changes {
+        app.add_log("INFO", "No changes staged with git, staging all changes...");
         let output = Command::new("git").args(["add", "."]).output()?;
         if output.status.success() {
             app.add_log("INFO", "Staged all changes");
@@ -238,7 +239,7 @@ pub fn git_stage_and_commit(
             return Err("Failed to stage changes".into());
         }
     } else {
-        app.add_log("INFO", "Changes already staged, skipping git add");
+        app.add_log("INFO", "Some changes already staged, skipping 'git add .'");
     }
 
     let mut commit_message = commit_title.trim().to_string();
