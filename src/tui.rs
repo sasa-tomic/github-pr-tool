@@ -79,6 +79,12 @@ impl<'a> App<'a> {
     pub fn add_error<S: ToString>(&mut self, error: S) {
         self.errors
             .extend(error.to_string().split('\n').map(|s| s.to_string()));
+        self.logs.extend(
+            error
+                .to_string()
+                .split('\n')
+                .map(|s| ("ERROR", s.to_string())),
+        );
         self.start_error_blink();
     }
 
