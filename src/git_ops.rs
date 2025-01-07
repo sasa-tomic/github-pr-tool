@@ -3,6 +3,9 @@ use ratatui::style::Color;
 use ratatui::{backend::Backend, Terminal};
 use std::process::Command;
 
+const AUTOCOMMIT_BRANCH_NAME: &str = "gh-autopr-index-autocommit";
+const AUTOSTASH_NAME: &str = "gh-autopr-index-autostash";
+
 pub fn git_ensure_in_repo(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     let output = Command::new("git")
         .args(["rev-parse", "--is-inside-work-tree"])
@@ -164,12 +167,57 @@ pub fn git_fetch_main(
     main_branch: &String,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if current_branch == main_branch {
+        let had_staged_changes = git_has_staged_changes()?;
+        if had_staged_changes {
+            app.add_log("INFO", "Staged changes detected, stashing in temp branch");
+            git_checkout_new_branch(app, AUTOCOMMIT_BRANCH_NAME, true)?;
+            git_commit_staged_changes(app, "Temporary commit for stashing changes", &None)?;
+            // Stash all other changes
+            Command::new("git")
+                .args(["stash", "push", "-m", AUTOSTASH_NAME, "--all"])
+                .output()?;
+            // Return to main branch
+            git_checkout_branch(app, main_branch)?;
+        }
         let output = Command::new("git").args(["pull", "origin"]).output()?;
         if !output.status.success() {
             app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
             return Err("Failed to pull from origin".into());
         }
         app.add_log("INFO", "Pulled latest changes from origin");
+        if had_staged_changes {
+            // Add changes from AUTOCOMMIT_BRANCH_NAME to the index (staged): git cherry-pick AUTOCOMMIT_BRANCH_NAME~0
+            let output = Command::new("git")
+                .args(["cherry-pick", &format!("{}~0", AUTOCOMMIT_BRANCH_NAME)])
+                .output()?;
+            if !output.status.success() {
+                app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
+                return Err(format!(
+                    "Failed to cherry-pick staged changes to the latest {}",
+                    main_branch
+                )
+                .into());
+            }
+            app.add_log(
+                "INFO",
+                "Cherry-picked staged changes to the latest main branch",
+            );
+            // Reset the last commit: git reset --soft HEAD~1
+            let output = Command::new("git")
+                .args(["reset", "--soft", "HEAD~1"])
+                .output()?;
+            if !output.status.success() {
+                app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
+                return Err("Failed to reset the last commit".into());
+            }
+            app.add_log("INFO", "Reset the last commit");
+            // Stage all changes: git add .
+            let output = Command::new("git").args(["add", "."]).output()?;
+            if !output.status.success() {
+                app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
+                return Err("Failed to stage all changes".into());
+            }
+        }
     } else {
         let output = Command::new("git")
             .args([
@@ -191,7 +239,7 @@ pub fn git_fetch_main(
 pub fn git_checkout_branch(
     app: &mut App,
     branch_name: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<String, Box<dyn std::error::Error>> {
     let output = Command::new("git")
         .args(["checkout", branch_name])
         .output()?;
@@ -202,6 +250,60 @@ pub fn git_checkout_branch(
     }
 
     app.add_log("INFO", format!("Checked out branch: {}", branch_name));
+    Ok(String::from_utf8_lossy(output.stdout.as_slice()).to_string())
+}
+
+pub fn git_checkout_new_branch(
+    app: &mut App,
+    branch_name: &str,
+    force_reset: bool,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let mut args = vec!["checkout"];
+    if force_reset {
+        args.push("-B");
+    } else {
+        let output = Command::new("git")
+            .args(["rev-parse", "--verify", branch_name])
+            .output()?;
+        if output.status.success() {
+            let msg = format!("Branch {} already exists", branch_name);
+            app.add_error(msg.clone());
+            return Err(msg.into());
+        }
+        args.push("-b");
+    }
+    args.push(branch_name);
+
+    let output = Command::new("git").args(args).output()?;
+
+    if !output.status.success() {
+        app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
+        return Err("Failed to checkout new branch".into());
+    }
+
+    app.add_log("INFO", format!("Checked out new branch: {}", branch_name));
+    Ok(String::from_utf8_lossy(output.stdout.as_slice()).to_string())
+}
+
+pub fn git_commit_staged_changes(
+    app: &mut App,
+    commit_title: &str,
+    commit_details: &Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut commit_message = commit_title.trim().to_string();
+    if let Some(details) = commit_details {
+        commit_message.push_str(&format!("\n\n{}", details.trim()));
+    }
+
+    let output = Command::new("git")
+        .args(["commit", "-m", &commit_message])
+        .output()?;
+    if !output.status.success() {
+        app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
+        return Err("Failed to commit changes".into());
+    }
+    app.add_log("INFO", "Committed changes successfully");
+
     Ok(())
 }
 
@@ -219,18 +321,53 @@ pub fn git_pull_branch(app: &mut App, branch_name: &str) -> Result<(), Box<dyn s
     Ok(())
 }
 
+pub fn git_has_staged_changes() -> Result<bool, Box<dyn std::error::Error>> {
+    let output = Command::new("git")
+        .args(["diff", "--cached", "--quiet"])
+        .output()?;
+
+    Ok(!output.status.success())
+}
+
+pub fn git_stash_pop_autostash_if_exists(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
+    // Check if AUTOSTASH_NAME exists
+    let output = Command::new("git").args(["stash", "list"]).output()?;
+    if !output.status.success() {
+        app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
+        return Err("Failed to list stashes".into());
+    }
+    if String::from_utf8(output.stdout)?.contains(AUTOSTASH_NAME) {
+        app.add_log("INFO", format!("Found stash with name: {}", AUTOSTASH_NAME));
+        // Pop AUTOSTASH_NAME: git stash apply stash^{/my_stash_name}
+        let output = Command::new("git")
+            .args([
+                "stash",
+                "apply",
+                format!("stash^{{/{}}}", AUTOSTASH_NAME).as_str(),
+            ])
+            .output()?;
+        if !output.status.success() {
+            app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
+            return Err("Failed to pop stash".into());
+        }
+        app.add_log("INFO", "Popped AUTOSTASH_NAME");
+    } else {
+        app.add_log(
+            "INFO",
+            format!("No stash found with name: {}", AUTOSTASH_NAME),
+        );
+    }
+    Ok(())
+}
+
 pub fn git_stage_and_commit(
     app: &mut App,
     commit_title: &str,
     commit_details: &Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let check_git_cached_changes = Command::new("git")
-        .args(["diff", "--cached", "--quiet"])
-        .output()?;
-
-    let git_no_staged_changes = check_git_cached_changes.status.success();
-    if git_no_staged_changes {
-        app.add_log("INFO", "No changes staged with git, staging all changes...");
+    if git_has_staged_changes()? {
+        app.add_log("INFO", "Changes already staged, skipping git add");
+    } else {
         let output = Command::new("git").args(["add", "."]).output()?;
         if output.status.success() {
             app.add_log("INFO", "Staged all changes");
@@ -238,22 +375,9 @@ pub fn git_stage_and_commit(
             app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
             return Err("Failed to stage changes".into());
         }
-    } else {
-        app.add_log("INFO", "Some changes already staged, skipping 'git add .'");
     }
 
-    let mut commit_message = commit_title.trim().to_string();
-    if let Some(details) = commit_details {
-        commit_message.push_str(&format!("\n\n{}", details.trim()));
-    }
-
-    let output = Command::new("git")
-        .args(["commit", "-m", &commit_message])
-        .output()?;
-    if !output.status.success() {
-        app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
-        return Err("Failed to commit changes".into());
-    }
+    git_commit_staged_changes(app, commit_title, commit_details)?;
     app.add_log("INFO", "Committed changes successfully");
 
     Ok(())

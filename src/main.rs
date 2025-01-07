@@ -158,14 +158,15 @@ async fn run<B: Backend>(
         terminal.draw(|f| ui(f, app))?;
 
         if current_branch == main_branch {
+            git_checkout_new_branch(app, &branch_name, false)?;
             let output = Command::new("git")
                 .args(["checkout", "-b", &branch_name])
                 .output()?;
-            current_branch = branch_name;
             app.add_log("INFO", String::from_utf8_lossy(&output.stdout).to_string());
             if !output.status.success() {
                 app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
             }
+            current_branch = branch_name;
             terminal.draw(|f| ui(f, app))?;
         }
         git_stage_and_commit(app, &commit_title, &commit_details)?;
@@ -237,6 +238,9 @@ async fn run<B: Backend>(
     terminal.draw(|f| ui(f, app))?;
 
     git_pull_branch(app, &original_branch)?;
+    terminal.draw(|f| ui(f, app))?;
+
+    git_stash_pop_autostash_if_exists(app)?;
     terminal.draw(|f| ui(f, app))?;
 
     // Cancel the UI progress-update task
