@@ -47,9 +47,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (log_level, log_message) in &app.logs {
         println!("{}: {}", log_level, log_message);
     }
-    for error in &app.errors {
-        eprintln!("ERROR: {}", error);
-    }
 
     Ok(())
 }
