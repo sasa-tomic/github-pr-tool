@@ -350,7 +350,7 @@ pub fn git_stash_pop_autostash_if_exists(app: &mut App) -> Result<(), Box<dyn st
             app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
             return Err("Failed to pop stash".into());
         }
-        app.add_log("INFO", "Popped AUTOSTASH_NAME");
+        app.add_log("INFO", format!("Popped {}", AUTOSTASH_NAME));
     } else {
         app.add_log(
             "INFO",
