@@ -174,7 +174,7 @@ pub fn git_fetch_main(
             git_commit_staged_changes(app, "Temporary commit for stashing changes", &None)?;
             // Stash all other changes
             Command::new("git")
-                .args(["stash", "push", "-m", AUTOSTASH_NAME, "--all"])
+                .args(["stash", "push", "-m", AUTOSTASH_NAME, "--include-untracked"])
                 .output()?;
             // Return to main branch
             git_checkout_branch(app, main_branch)?;
