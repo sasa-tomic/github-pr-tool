@@ -446,6 +446,7 @@ pub fn create_or_update_pull_request(
             .args([
                 "pr",
                 "create",
+                "--draft",
                 "--title",
                 title,
                 "--body",
