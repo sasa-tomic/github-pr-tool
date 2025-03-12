@@ -25,8 +25,13 @@ Instead of \"provides support for\", use \"supports\".
 Do not make statements that are not directly supported by the diff.
 For instance, do not use \"enhances\", unless mentioned in the diff.
 Do not say \"this change will improve performance\" unless the diff clearly claims that.
-Do not provide less details about the changes in comments or tests unless they are the focus of the PR; instead just casually and highly concisely mention such changes with something like \"updated tests accordingly\" or \"updated comments\".
+TRY TO IDENTIFY the MAJOR CHANGE(s) of the PR and in the description focus only on the major changes.
+If there are any side changes that had to be made in order to implement the major change, do NOT mention the side changes in the PR description. So, only mention the major changes.
+If there are multiple major changes, mention all of them.
+If there are changes in tests cover them with a single sentence like: \"Added tests for the above\". Similar for comments: \"Updated comments\".
+
 Ensure clarity by avoiding redundant or overly elaborate expressions. Always be concise and to the point.
+Make sure that there is NO REDUNDANT information in the description.
 ".to_string(),
             ),
             ..Default::default()
