@@ -81,7 +81,10 @@ pub fn git_diff_uncommitted(app: &mut App) -> Result<String, Box<dyn std::error:
 
         return Ok(String::from_utf8(output.stdout)?.trim().to_string());
     }
-
+    const MAX_DIFF_SIZE: usize = 200 * 1024; // 200KB limit, many AIs don't handle more than this
+    if diff_context.len() > MAX_DIFF_SIZE {
+        return Ok(diff_context[..MAX_DIFF_SIZE].to_string());
+    }
     Ok(diff_context)
 }
 
