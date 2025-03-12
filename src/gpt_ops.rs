@@ -28,10 +28,11 @@ Do not say \"this change will improve performance\" unless the diff clearly clai
 TRY TO IDENTIFY the MAJOR CHANGE(s) of the PR and in the description focus only on the major changes.
 If there are any side changes that had to be made in order to implement the major change, do NOT mention the side changes in the PR description. So, only mention the major changes.
 If there are multiple major changes, mention all of them.
-If there are changes in tests cover them with a single sentence like: \"Added tests for the above\". Similar for comments: \"Updated comments\".
+OMIT details about the changes in comments or tests unless they are the primary focus of the PR.
+If there are changes in comments or tests mention such changes with a single line such as \"updated tests accordingly\" or \"updated comments\".
 
 Ensure clarity by avoiding redundant or overly elaborate expressions. Always be concise and to the point.
-Make sure that there is NO REDUNDANT information in the description.
+Make sure that there is NO REDUNDANT or obvious information in the description. Ensure that every word in the description is necessary and adds value.
 ".to_string(),
             ),
             ..Default::default()
@@ -45,7 +46,7 @@ Make sure that there is NO REDUNDANT information in the description.
             ..Default::default()
         },
     ];
-    let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
+    let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-o3-mini".to_string());
 
     let chat_request = ChatCompletion::builder(&model, messages.clone())
         .credentials(credentials.clone())
