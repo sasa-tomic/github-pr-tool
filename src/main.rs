@@ -166,8 +166,17 @@ async fn run<B: Backend>(
             gpt_generate_branch_name_and_commit_description(app, diff_uncommitted).await?;
         terminal.draw(|f| ui(f, app))?;
 
-        if current_branch == main_branch {
+        if update_pr {
+            if current_branch == main_branch {
+                // When updating a PR on the main branch, create a new branch
+                git_checkout_new_branch(app, &branch_name, false)?;
+                current_branch = branch_name;
+                terminal.draw(|f| ui(f, app))?;
+            }
+        } else {
+            // When not updating, always create a new branch
             git_checkout_new_branch(app, &branch_name, false)?;
+            app.add_log("INFO", format!("Created new branch: {branch_name}"));
             current_branch = branch_name;
             terminal.draw(|f| ui(f, app))?;
         }
