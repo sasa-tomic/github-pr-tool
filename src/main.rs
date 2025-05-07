@@ -4,6 +4,15 @@ mod tui;
 use crate::git_ops::*;
 use crate::gpt_ops::*;
 use crate::tui::*;
+use clap::Parser;
+
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Update an existing PR instead of creating a new one
+    #[arg(long)]
+    update: bool,
+}
 use ratatui::{
     backend::{Backend, CrosstermBackend},
     crossterm::{
@@ -18,6 +27,9 @@ use tokio::time::{Duration, Instant};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Parse command line arguments
+    let args = Args::parse();
+
     // Initialize the terminal
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
@@ -28,7 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut app = App::new("GitHub PR Auto-Submit");
     let tick_rate = Duration::from_millis(250);
-    let app_result = run(&mut terminal, &mut app, tick_rate).await;
+    let app_result = run(&mut terminal, &mut app, tick_rate, args.update).await;
 
     // restore terminal
     disable_raw_mode()?;
@@ -54,6 +66,7 @@ async fn run<B: Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App<'_>,
     tick_rate: Duration,
+    update_pr: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut last_tick = Instant::now();
 
@@ -215,8 +228,31 @@ async fn run<B: Backend>(
     app.add_log("INFO", "Creating pull request...");
     app.update_progress(0.8);
     terminal.draw(|f| ui(f, app))?;
-
-    let _ = create_or_update_pull_request(app, &commit_title, &commit_details.unwrap_or_default());
+    if update_pr {
+        app.add_log("INFO", "Updating existing pull request...");
+    } else {
+        app.add_log("INFO", "Creating new pull request...");
+    }
+    match create_or_update_pull_request(
+        app,
+        &commit_title,
+        &commit_details.unwrap_or_default(),
+        update_pr,
+    ) {
+        Ok(_) => {
+            app.add_log("INFO", "Pull request created/updated successfully.");
+        }
+        Err(err) => {
+            app.add_error(format!("Failed to create/update pull request: {}", err));
+            app.switch_to_tab(1);
+            terminal.draw(|f| ui(f, app))?;
+            // Cancel the UI task to avoid concurrent draws in the error case.
+            ui_update.abort();
+            // Await user input so the user can see the error message before exiting.
+            run_event_loop(terminal, app, tick_rate, &mut last_tick)?;
+            return Err(err);
+        }
+    }
     terminal.draw(|f| ui(f, app))?;
 
     app.add_log("SUCCESS", "Pull request created successfully.");
@@ -234,6 +270,8 @@ async fn run<B: Backend>(
 
     // Cancel the UI progress-update task
     ui_update.abort();
+
+    // Await user input before finishing so the UI remains visible.
     run_event_loop(terminal, app, tick_rate, &mut last_tick)?;
     Ok(())
 }
