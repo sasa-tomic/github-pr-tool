@@ -387,13 +387,29 @@ pub fn git_stage_and_commit(
 }
 
 pub fn git_push_branch(app: &mut App, branch_name: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let output = Command::new("git")
-        .args(["push", "origin", branch_name])
+    // Check if branch already has upstream tracking
+    let check_upstream = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", &format!("{branch_name}@{{u}}")])
         .output()?;
+
+    let has_upstream = check_upstream.status.success();
+    let mut push_args = vec!["push"];
+
+    if !has_upstream {
+        // If no upstream exists, set it up with -u flag
+        push_args.extend(["--set-upstream", "origin", branch_name]);
+        app.add_log("INFO", "Setting up upstream tracking branch");
+    } else {
+        push_args.extend(["origin", branch_name]);
+    }
+
+    let output = Command::new("git").args(&push_args).output()?;
+
     if !output.status.success() {
         app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
         return Err("Failed to push branch".into());
     }
+
     app.add_log("INFO", format!("Pushed branch {} to origin", branch_name));
     Ok(())
 }
