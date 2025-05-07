@@ -12,6 +12,10 @@ struct Args {
     /// Update an existing PR instead of creating a new one
     #[arg(long)]
     update: bool,
+
+    /// Create PR as ready for review instead of draft
+    #[arg(long)]
+    ready: bool,
 }
 use ratatui::{
     backend::{Backend, CrosstermBackend},
@@ -40,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut app = App::new("GitHub PR Auto-Submit");
     let tick_rate = Duration::from_millis(250);
-    let app_result = run(&mut terminal, &mut app, tick_rate, args.update).await;
+    let app_result = run(&mut terminal, &mut app, tick_rate, args.update, args.ready).await;
 
     // restore terminal
     disable_raw_mode()?;
@@ -67,6 +71,7 @@ async fn run<B: Backend>(
     app: &mut App<'_>,
     tick_rate: Duration,
     update_pr: bool,
+    ready: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut last_tick = Instant::now();
 
@@ -247,6 +252,7 @@ async fn run<B: Backend>(
         &commit_title,
         &commit_details.unwrap_or_default(),
         update_pr,
+        ready,
     ) {
         Ok(_) => {
             app.add_log("INFO", "Pull request created/updated successfully.");

@@ -403,6 +403,7 @@ pub fn create_or_update_pull_request(
     title: &str,
     body: &str,
     update_pr: bool,
+    ready: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let should_update = if update_pr {
         // Check if PR exists
@@ -460,19 +461,21 @@ pub fn create_or_update_pull_request(
         return Err("No existing PR found to update".into());
     } else {
         // Create new PR
-        let create_output = Command::new("gh")
-            .args([
-                "pr",
-                "create",
-                "--draft",
-                "--title",
-                title,
-                "--body",
-                body,
-                "--assignee",
-                "@me",
-            ])
-            .output()?;
+        let mut args = vec![
+            "pr",
+            "create",
+            "--title",
+            title,
+            "--body",
+            body,
+            "--assignee",
+            "@me",
+        ];
+        if !ready {
+            args.push("--draft");
+        }
+
+        let create_output = Command::new("gh").args(&args).output()?;
 
         if !create_output.status.success() {
             app.add_error(String::from_utf8_lossy(&create_output.stderr).to_string());
