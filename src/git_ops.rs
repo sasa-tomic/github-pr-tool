@@ -90,13 +90,49 @@ pub fn git_diff_uncommitted(app: &mut App) -> Result<String, Box<dyn std::error:
 
 pub fn git_diff_between_branches(
     app: &mut App,
-    main_branch: &String,
+    main_branch: &str,
     current_branch: &String,
 ) -> Result<String, Box<dyn std::error::Error>> {
+    // Check if this branch has an existing PR to determine base branch
+    let base_branch_output = Command::new("gh")
+        .args([
+            "pr",
+            "list",
+            "--state",
+            "open",
+            "--head",
+            current_branch,
+            "--json",
+            "baseRefName",
+        ])
+        .output()?;
+
+    let base_branch = if base_branch_output.status.success() {
+        let json_str = String::from_utf8(base_branch_output.stdout)?;
+        if !json_str.trim().is_empty() && json_str != "[]" {
+            if let Some(base) = json_str
+                .lines()
+                .next()
+                .and_then(|line| serde_json::from_str::<Vec<serde_json::Value>>(line).ok())
+                .and_then(|prs| prs.first().cloned())
+                .and_then(|pr| pr["baseRefName"].as_str().map(|s| s.to_string()))
+            {
+                app.add_log("INFO", format!("Using PR base branch {} for diff", base));
+                base
+            } else {
+                main_branch.to_owned()
+            }
+        } else {
+            main_branch.to_owned()
+        }
+    } else {
+        main_branch.to_owned()
+    };
+
     let output = Command::new("git")
         .args([
             "diff",
-            &format!("{}...{}", main_branch, current_branch),
+            &format!("{}...{}", base_branch, current_branch),
             "--",
             ".",
             ":!*.lock",
@@ -427,33 +463,36 @@ pub fn create_or_update_pull_request(
     update_pr: bool,
     ready: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let should_update = if update_pr {
-        // Check if PR exists
-        let check_output = Command::new("gh")
-            .args([
-                "pr",
-                "list",
-                "--state",
-                "open",
-                "--head",
-                &git_current_branch(app)?,
-            ])
-            .output()?;
+    let current_branch = git_current_branch(app)?;
 
-        let s = String::from_utf8(check_output.stdout)?.trim().to_string();
-        let pr_exists = check_output.status.success()
-            && !(s.is_empty() || s.starts_with("no pull requests match your search"));
+    // Check if PR exists and get base branch
+    let check_output = Command::new("gh")
+        .args([
+            "pr",
+            "list",
+            "--state",
+            "open",
+            "--head",
+            &current_branch,
+            "--json",
+            "baseRefName",
+        ])
+        .output()?;
 
-        if pr_exists {
-            app.add_log("INFO", format!("Existing PR found: {}", s));
-            true
-        } else {
-            app.add_log("INFO", "No existing PR found to update, creating new one");
-            false
-        }
+    let s = String::from_utf8(check_output.stdout)?.trim().to_string();
+    let pr_exists = check_output.status.success()
+        && !(s.is_empty() || s.starts_with("no pull requests match your search"));
+
+    let base_branch = if check_output.status.success() && !s.is_empty() && s != "[]" {
+        serde_json::from_str::<Vec<serde_json::Value>>(&s)
+            .ok()
+            .and_then(|prs| prs.first().cloned())
+            .and_then(|pr| pr["baseRefName"].as_str().map(|s| s.to_string()))
     } else {
-        false
+        None
     };
+
+    let should_update = update_pr && pr_exists;
 
     if should_update {
         let update_output = Command::new("gh")
@@ -483,22 +522,6 @@ pub fn create_or_update_pull_request(
         return Err("No existing PR found to update".into());
     } else {
         // Create new PR
-        let current_branch = git_current_branch(app)?;
-
-        // Check if this is a PR against an existing PR/branch
-        let base_branch_output = Command::new("gh")
-            .args([
-                "pr",
-                "list",
-                "--state",
-                "open",
-                "--head",
-                &current_branch,
-                "--json",
-                "headRefName,baseRefName",
-            ])
-            .output()?;
-
         let mut args = vec![
             "pr".to_string(),
             "create".to_string(),
@@ -510,25 +533,11 @@ pub fn create_or_update_pull_request(
             "@me".to_string(),
         ];
 
-        // If there's an existing PR for this branch, use its head branch as our base
-        if base_branch_output.status.success() {
-            let json_str = String::from_utf8(base_branch_output.stdout)?;
-            if !json_str.trim().is_empty() && json_str != "[]" {
-                if let Some(base_branch) = json_str
-                    .lines()
-                    .next()
-                    .and_then(|line| serde_json::from_str::<Vec<serde_json::Value>>(line).ok())
-                    .and_then(|prs| prs.first().cloned())
-                    .and_then(|pr| pr["headRefName"].as_str().map(|s| s.to_string()))
-                {
-                    args.push("--base".to_string());
-                    args.push(base_branch);
-                    app.add_log(
-                        "INFO",
-                        format!("Using {} as base branch", args.last().unwrap()),
-                    );
-                }
-            }
+        // Add base branch if found from existing PR
+        if let Some(base) = base_branch {
+            args.push("--base".to_string());
+            args.push(base.clone());
+            app.add_log("INFO", format!("Using {} as base branch", base));
         }
         if !ready {
             args.push("--draft".to_string());
