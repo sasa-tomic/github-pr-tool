@@ -141,7 +141,7 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
     );
     f.render_widget(tabs, chunks[0]);
 
-    let help = Paragraph::new("Press 'q' to quit").style(Style::default().fg(Color::Gray));
+    let help = Paragraph::new("Press 'q' to quit").style(Style::default().fg(Color::White));
     f.render_widget(help, chunks[1]);
 
     app.update_blink();
