@@ -402,25 +402,37 @@ pub fn create_or_update_pull_request(
     app: &mut App,
     title: &str,
     body: &str,
+    update_pr: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // First check if PR already exists
-    let check_output = Command::new("gh")
-        .args([
-            "pr",
-            "list",
-            "--state",
-            "open",
-            "--head",
-            &git_current_branch(app)?,
-        ])
-        .output()?;
+    let should_update = if update_pr {
+        // Check if PR exists
+        let check_output = Command::new("gh")
+            .args([
+                "pr",
+                "list",
+                "--state",
+                "open",
+                "--head",
+                &git_current_branch(app)?,
+            ])
+            .output()?;
 
-    let s = String::from_utf8(check_output.stdout)?.trim().to_string();
-    if check_output.status.success()
-        && !(s.is_empty() || s.starts_with("no pull requests match your search"))
-    {
-        // PR exists, update it
-        app.add_log("INFO", format!("Existing PR found, updating: {}", s));
+        let s = String::from_utf8(check_output.stdout)?.trim().to_string();
+        let pr_exists = check_output.status.success()
+            && !(s.is_empty() || s.starts_with("no pull requests match your search"));
+
+        if pr_exists {
+            app.add_log("INFO", format!("Existing PR found: {}", s));
+            true
+        } else {
+            app.add_log("INFO", "No existing PR found to update, creating new one");
+            false
+        }
+    } else {
+        false
+    };
+
+    if should_update {
         let update_output = Command::new("gh")
             .args([
                 "pr",
@@ -443,6 +455,9 @@ pub fn create_or_update_pull_request(
             .into());
         }
         app.add_log("SUCCESS", "Pull request updated successfully");
+    } else if update_pr {
+        app.add_error("No existing PR found to update".to_string());
+        return Err("No existing PR found to update".into());
     } else {
         // Create new PR
         let create_output = Command::new("gh")
