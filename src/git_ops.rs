@@ -333,33 +333,39 @@ pub fn git_has_staged_changes() -> Result<bool, Box<dyn std::error::Error>> {
 }
 
 pub fn git_stash_pop_autostash_if_exists(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
-    // Check if AUTOSTASH_NAME exists
-    let output = Command::new("git").args(["stash", "list"]).output()?;
+    // List stashes with format showing only the message
+    let output = Command::new("git")
+        .args(["stash", "list", "--format=%gD:%gs"]) // %gD gives ref, %gs gives message
+        .output()?;
+
     if !output.status.success() {
         app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
         return Err("Failed to list stashes".into());
     }
-    if String::from_utf8(output.stdout)?.contains(AUTOSTASH_NAME) {
-        app.add_log("INFO", format!("Found stash with name: {}", AUTOSTASH_NAME));
-        // Pop AUTOSTASH_NAME: git stash apply stash^{/my_stash_name}
-        let output = Command::new("git")
-            .args([
-                "stash",
-                "apply",
-                format!("stash^{{/{}}}", AUTOSTASH_NAME).as_str(),
-            ])
-            .output()?;
-        if !output.status.success() {
-            app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
-            return Err("Failed to pop stash".into());
+
+    let stash_list = String::from_utf8(output.stdout)?;
+    for line in stash_list.lines() {
+        let parts: Vec<&str> = line.split(':').collect();
+        if parts.len() >= 2 && parts[1] == AUTOSTASH_NAME {
+            app.add_log("INFO", format!("Found stash with name: {}", AUTOSTASH_NAME));
+            // Use the exact stash reference (parts[0] contains stash@{N})
+            let output = Command::new("git")
+                .args(["stash", "apply", parts[0]])
+                .output()?;
+
+            if !output.status.success() {
+                app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
+                return Err("Failed to apply stash".into());
+            }
+            app.add_log("INFO", format!("Applied {}", AUTOSTASH_NAME));
+            return Ok(());
         }
-        app.add_log("INFO", format!("Popped {}", AUTOSTASH_NAME));
-    } else {
-        app.add_log(
-            "INFO",
-            format!("No stash found with name: {}", AUTOSTASH_NAME),
-        );
     }
+
+    app.add_log(
+        "INFO",
+        format!("No stash found with name: {}", AUTOSTASH_NAME),
+    );
     Ok(())
 }
 
