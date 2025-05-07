@@ -164,11 +164,21 @@ async fn run<B: Backend>(
         app.update_details(diff_uncommitted.clone());
         terminal.draw(|f| ui(f, app))?;
 
+        app.add_log("INFO", "Fetching GitHub issues...");
+        terminal.draw(|f| ui(f, app))?;
+
+        let issues_json = git_list_issues(app)?;
+
         app.add_log("INFO", "Generating branch name and commit description...");
         terminal.draw(|f| ui(f, app))?;
 
         let (branch_name, commit_title, commit_details) =
-            gpt_generate_branch_name_and_commit_description(app, diff_uncommitted).await?;
+            gpt_generate_branch_name_and_commit_description(
+                app,
+                diff_uncommitted,
+                Some(issues_json),
+            )
+            .await?;
         terminal.draw(|f| ui(f, app))?;
 
         if update_pr {
@@ -223,8 +233,17 @@ async fn run<B: Backend>(
     app.update_progress(0.5);
     terminal.draw(|f| ui(f, app))?;
 
-    let (_, commit_title, commit_details) =
-        gpt_generate_branch_name_and_commit_description(app, diff_between_branches).await?;
+    app.add_log("INFO", "Fetching GitHub issues...");
+    terminal.draw(|f| ui(f, app))?;
+
+    let issues_json = git_list_issues(app)?;
+
+    let (_, commit_title, commit_details) = gpt_generate_branch_name_and_commit_description(
+        app,
+        diff_between_branches,
+        Some(issues_json),
+    )
+    .await?;
     app.add_log("INFO", format!("Commit title: {commit_title}"));
     app.add_log(
         "INFO",

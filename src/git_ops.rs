@@ -499,3 +499,36 @@ pub fn create_or_update_pull_request(
     }
     Ok(())
 }
+
+// Example GitHub issues JSON output:
+/*
+[
+  {
+    "body": "This is a body of the GH issue.",
+    "labels": [
+      {
+        "id": "LA_kwDOOTdaS88AAAAB9JPIwX",
+        "name": "bug",
+        "description": "Something isn't working",
+        "color": "d73a4a"
+      }
+    ],
+    "number": 42,
+    "title": "This is a title of the GH issue."
+  }
+]
+*/
+pub fn git_list_issues(app: &mut App) -> Result<String, Box<dyn std::error::Error>> {
+    let output = Command::new("gh")
+        .args(["issue", "list", "--json", "number,title,labels,body"])
+        .output()?;
+
+    if !output.status.success() {
+        app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
+        return Err("Failed to list issues".into());
+    }
+
+    let json_str = String::from_utf8(output.stdout)?;
+    app.add_log("INFO", "Successfully retrieved GitHub issues");
+    Ok(json_str)
+}

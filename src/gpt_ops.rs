@@ -7,7 +7,9 @@ use openai::{
 pub async fn gpt_generate_branch_name_and_commit_description(
     app: &mut App<'_>,
     diff_context: String,
+    issues_json: Option<String>,
 ) -> Result<(String, String, Option<String>), Box<dyn std::error::Error>> {
+    const MAX_ISSUES_LEN: usize = 16 * 1024; // 16K characters limit for issues
     let credentials = Credentials::from_env();
     let messages = vec![
         ChatCompletionMessage {
@@ -17,6 +19,12 @@ pub async fn gpt_generate_branch_name_and_commit_description(
 You will provide output in JSON format with keys: 'branch_name', 'commit_title', and 'commit_details'.
 For a very small PR return 'commit_details' as null, otherwise politely in a well structured markdown format describe all major changes for the PR.
 Do not describe the impact unless there is a breaking change.
+
+If open GitHub issues are provided, analyze them and:
+1. Add a line 'Relates to #X' if changes are related to issue #X
+2. Add a line 'Closes #X' if changes completely address issue #X
+3. Add these lines at the very end of commit_details
+4. Only reference truly relevant issues - don't force connections
 Follow the Conventional Commits specification for formatting the commit_title.
 Please write in a HIGHLY CONCISE and professional style, prioritizing action-oriented verbs over longer descriptive phrases. For example:
 Instead of \"introduces enhancements to functionality\" use \"extends functionality\".
@@ -40,8 +48,15 @@ Make sure that there is NO REDUNDANT or obvious information in the description. 
         ChatCompletionMessage {
             role: ChatCompletionMessageRole::User,
             content: Some(format!(
-                "Context:\n{}",
-                diff_context
+                "Context:\n{}\n\nOpen GitHub Issues:\n{}",
+                diff_context,
+                issues_json
+                    .map(|j| if j.len() > MAX_ISSUES_LEN {
+                        j[..MAX_ISSUES_LEN].to_string()
+                    } else {
+                        j
+                    })
+                    .unwrap_or_else(|| "No open issues".to_string())
             )),
             ..Default::default()
         },
