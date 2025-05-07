@@ -461,18 +461,55 @@ pub fn create_or_update_pull_request(
         return Err("No existing PR found to update".into());
     } else {
         // Create new PR
+        let current_branch = git_current_branch(app)?;
+
+        // Check if this is a PR against an existing PR/branch
+        let base_branch_output = Command::new("gh")
+            .args([
+                "pr",
+                "list",
+                "--state",
+                "open",
+                "--head",
+                &current_branch,
+                "--json",
+                "headRefName,baseRefName",
+            ])
+            .output()?;
+
         let mut args = vec![
-            "pr",
-            "create",
-            "--title",
-            title,
-            "--body",
-            body,
-            "--assignee",
-            "@me",
+            "pr".to_string(),
+            "create".to_string(),
+            "--title".to_string(),
+            title.to_string(),
+            "--body".to_string(),
+            body.to_string(),
+            "--assignee".to_string(),
+            "@me".to_string(),
         ];
+
+        // If there's an existing PR for this branch, use its head branch as our base
+        if base_branch_output.status.success() {
+            let json_str = String::from_utf8(base_branch_output.stdout)?;
+            if !json_str.trim().is_empty() && json_str != "[]" {
+                if let Some(base_branch) = json_str
+                    .lines()
+                    .next()
+                    .and_then(|line| serde_json::from_str::<Vec<serde_json::Value>>(line).ok())
+                    .and_then(|prs| prs.first().cloned())
+                    .and_then(|pr| pr["headRefName"].as_str().map(|s| s.to_string()))
+                {
+                    args.push("--base".to_string());
+                    args.push(base_branch);
+                    app.add_log(
+                        "INFO",
+                        format!("Using {} as base branch", args.last().unwrap()),
+                    );
+                }
+            }
+        }
         if !ready {
-            args.push("--draft");
+            args.push("--draft".to_string());
         }
 
         let create_output = Command::new("gh").args(&args).output()?;
