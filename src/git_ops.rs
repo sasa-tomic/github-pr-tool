@@ -383,7 +383,9 @@ pub fn git_stash_pop_autostash_if_exists(app: &mut App) -> Result<(), Box<dyn st
     let stash_list = String::from_utf8(output.stdout)?;
     for line in stash_list.lines() {
         let parts: Vec<&str> = line.split(':').collect();
-        if parts.len() >= 2 && parts[1] == AUTOSTASH_NAME {
+        if parts.len() >= 2
+            && parts[1] == format!("On {}: {}", AUTOCOMMIT_BRANCH_NAME, AUTOSTASH_NAME)
+        {
             app.add_log("INFO", format!("Found stash with name: {}", AUTOSTASH_NAME));
             // Use the exact stash reference (parts[0] contains stash@{N})
             let output = Command::new("git")
