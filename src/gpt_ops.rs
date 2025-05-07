@@ -46,7 +46,7 @@ Make sure that there is NO REDUNDANT or obvious information in the description. 
             ..Default::default()
         },
     ];
-    let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-o3-mini".to_string());
+    let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "o4-mini".to_string());
 
     let chat_request = ChatCompletion::builder(&model, messages.clone())
         .credentials(credentials.clone())
