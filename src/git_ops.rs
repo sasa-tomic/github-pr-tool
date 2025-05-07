@@ -441,7 +441,7 @@ pub fn create_or_update_pull_request(
                 title,
                 "--body",
                 body,
-                "--assignee",
+                "--add-assignee",
                 "@me",
             ])
             .output()?;
