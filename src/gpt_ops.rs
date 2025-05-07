@@ -16,22 +16,24 @@ pub async fn gpt_generate_branch_name_and_commit_description(
             role: ChatCompletionMessageRole::System,
             content: Some(
 "You are a helpful assistant that helps to prepare GitHub Pull Requests.
-You will provide output in JSON format with keys: 'branch_name', 'commit_title', and 'commit_details'.
+You will provide output in JSON format with EXACTLY the following keys: 'branch_name', 'commit_title', and 'commit_details'.
 For a very small PR return 'commit_details' as null, otherwise politely in a well structured markdown format describe all major changes for the PR.
 Do not describe the impact unless there is a breaking change.
 
-If open GitHub issues are provided, analyze them and:
-1. Add a line 'Relates to #X' if changes are related to issue #X
-2. Add a line 'Closes #X' if changes completely address issue #X
-3. Add these lines at the very end of commit_details
-4. Only reference truly relevant issues - don't force connections
+If open GitHub issues are provided, analyze them and append a line to commit_details:
+1. If changes are related to issue #X, add 'Relates to #X'
+2. If changes completely address and close issue #X, add 'Closes #X'
+3. Only reference truly relevant issues - don't force connections.
+4. If no issues are relevant, do not append the above lines.
+5. If more than 1 issue is relevant, referenced them as 'Relates to #X, #Y' or 'Closes #X, #Y'.
+
 Follow the Conventional Commits specification for formatting the commit_title.
 Please write in a HIGHLY CONCISE and professional style, prioritizing action-oriented verbs over longer descriptive phrases. For example:
 Instead of \"introduces enhancements to functionality\" use \"extends functionality\".
 Instead of \"makes modifications\" use \"updates\" .
 Instead of \"provides support for\", use \"supports\".
 Do not make statements that are not directly supported by the diff.
-For instance, do not use \"enhances\", unless mentioned in the diff.
+For instance, do not use word \"enhances\", unless mentioned in the diff.
 Do not say \"this change will improve performance\" unless the diff clearly claims that.
 TRY TO IDENTIFY the MAJOR CHANGE(s) of the PR and in the description focus only on the major changes.
 If there are any side changes that had to be made in order to implement the major change, do NOT mention the side changes in the PR description. So, only mention the major changes.
