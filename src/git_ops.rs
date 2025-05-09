@@ -605,8 +605,16 @@ pub fn git_list_issues(app: &mut App) -> Result<String, Box<dyn std::error::Erro
         .args(["issue", "list", "--json", "number,title,labels,body"])
         .output()?;
 
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     if !output.status.success() {
-        app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
+        // Handle specific error cases
+        if stderr.contains("has disabled issues") {
+            app.add_log("WARN", "Repository has issues disabled");
+            let empty_list = "[]".to_string();
+            *cache = Some(empty_list.clone());
+            return Ok(empty_list);
+        }
+        app.add_error(stderr);
         return Err("Failed to list issues".into());
     }
 
