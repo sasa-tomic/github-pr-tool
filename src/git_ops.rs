@@ -89,12 +89,17 @@ pub fn git_diff_uncommitted(app: &mut App) -> Result<String, Box<dyn std::error:
     Ok(diff_context)
 }
 
+/// Determines the base branch for comparing changes and generating diffs.
+///
+/// For an existing PR: Uses the PR's base branch
+/// For a new branch: Uses the parent branch this branch was created from
+/// Fallback: Uses the repository's main branch
 pub fn git_diff_between_branches(
     app: &mut App,
     main_branch: &str,
     current_branch: &String,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    // Check if this branch has an existing PR to determine base branch
+    // First try to get base branch from existing PR
     let base_branch_output = Command::new("gh")
         .args([
             "pr",
@@ -118,17 +123,75 @@ pub fn git_diff_between_branches(
                 .and_then(|prs| prs.first().cloned())
                 .and_then(|pr| pr["baseRefName"].as_str().map(|s| s.to_string()))
             {
-                app.add_log("INFO", format!("Using PR base branch {} for diff", base));
+                app.add_log(
+                    "INFO",
+                    format!("Using existing PR base branch {} for diff", base),
+                );
                 base
+            } else {
+                // If no PR exists, try to find the parent branch this was branched from
+                let parent_branch_output = Command::new("git")
+                    .args([
+                        "rev-parse",
+                        "--abbrev-ref",
+                        &format!("{}@{{-1}}", current_branch),
+                    ])
+                    .output()?;
+
+                if parent_branch_output.status.success() {
+                    let parent = String::from_utf8(parent_branch_output.stdout)?
+                        .trim()
+                        .to_string();
+                    if !parent.is_empty() {
+                        app.add_log("INFO", format!("Using parent branch {} for diff", parent));
+                        parent
+                    } else {
+                        app.add_error(format!(
+                            "Found invalid empty parent branch, using {} instead",
+                            main_branch
+                        ));
+                        main_branch.to_owned()
+                    }
+                } else {
+                    app.add_error(format!(
+                        "No parent branch found, using {} branch",
+                        main_branch
+                    ));
+                    main_branch.to_owned()
+                }
+            }
+        } else {
+            // No PR exists, try to find parent branch
+            let parent_branch_output = Command::new("git")
+                .args([
+                    "rev-parse",
+                    "--abbrev-ref",
+                    &format!("{}@{{-1}}", current_branch),
+                ])
+                .output()?;
+
+            if parent_branch_output.status.success() {
+                let parent = String::from_utf8(parent_branch_output.stdout)?
+                    .trim()
+                    .to_string();
+                if !parent.is_empty() {
+                    app.add_log("INFO", format!("Using parent branch {} for diff", parent));
+                    parent
+                } else {
+                    main_branch.to_owned()
+                }
             } else {
                 main_branch.to_owned()
             }
-        } else {
-            main_branch.to_owned()
         }
     } else {
         main_branch.to_owned()
     };
+
+    app.add_log(
+        "INFO",
+        format!("Comparing against base branch: {}", base_branch),
+    );
 
     let output = Command::new("git")
         .args([
@@ -459,6 +522,12 @@ pub fn git_push_branch(app: &mut App, branch_name: &str) -> Result<(), Box<dyn s
     Ok(())
 }
 
+/// Creates or updates a pull request using the appropriate base branch.
+///
+/// Base branch determination:
+/// 1. For existing PR: Uses the PR's current base branch
+/// 2. For new PR: Uses the parent branch this was created from
+/// 3. Fallback: Uses the repository's main branch
 pub fn create_or_update_pull_request(
     app: &mut App,
     title: &str,
@@ -486,14 +555,42 @@ pub fn create_or_update_pull_request(
     let pr_exists = check_output.status.success()
         && !(s.is_empty() || s.starts_with("no pull requests match your search"));
 
-    let base_branch = if check_output.status.success() && !s.is_empty() && s != "[]" {
-        serde_json::from_str::<Vec<serde_json::Value>>(&s)
+    // Try to get base branch from existing PR
+    let mut base_branch = if check_output.status.success() && !s.is_empty() && s != "[]" {
+        if let Some(base) = serde_json::from_str::<Vec<serde_json::Value>>(&s)
             .ok()
             .and_then(|prs| prs.first().cloned())
             .and_then(|pr| pr["baseRefName"].as_str().map(|s| s.to_string()))
+        {
+            app.add_log("INFO", format!("Using existing PR base branch: {}", base));
+            Some(base)
+        } else {
+            None
+        }
     } else {
         None
     };
+
+    // If no base branch from PR, try to get parent branch
+    if base_branch.is_none() {
+        let parent_branch_output = Command::new("git")
+            .args([
+                "rev-parse",
+                "--abbrev-ref",
+                &format!("{}@{{-1}}", current_branch),
+            ])
+            .output()?;
+
+        if parent_branch_output.status.success() {
+            let parent = String::from_utf8(parent_branch_output.stdout)?
+                .trim()
+                .to_string();
+            if !parent.is_empty() {
+                app.add_log("INFO", format!("Using parent branch {} as PR base", parent));
+                base_branch = Some(parent);
+            }
+        }
+    }
 
     let should_update = update_pr && pr_exists;
 
@@ -536,12 +633,16 @@ pub fn create_or_update_pull_request(
             "@me".to_string(),
         ];
 
-        // Add base branch if found from existing PR
+        // Always specify the base branch for new PRs:
+        // 1. Use base from existing PR if available
+        // 2. Use detected parent branch if available
+        // 3. Use main branch as fallback (will be automatically determined by GitHub)
         if let Some(base) = base_branch {
             args.push("--base".to_string());
             args.push(base.clone());
-            app.add_log("INFO", format!("Using {} as base branch", base));
+            app.add_log("INFO", format!("Using {} as base branch for new PR", base));
         }
+
         if !ready {
             args.push("--draft".to_string());
         }
