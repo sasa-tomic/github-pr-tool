@@ -542,23 +542,9 @@ pub fn git_checkout_new_branch(
     }
 
     // 4. Configure tracking — remote if available, otherwise local
-    let status = if !upstream.is_empty() {
-        // Track the same remote as the source branch.
-        Command::new("git")
-            .args(["branch", "--set-upstream-to", &upstream, branch_name])
-            .status()?
-    } else {
-        // Track the local source branch.
-        Command::new("git")
-            .args(["branch", "--set-upstream-to", current_branch, branch_name])
-            .status()?
-    };
-
-    if !status.success() {
-        let e = "failed to set upstream";
-        app.add_error(e);
-        return Err(e.into());
-    }
+    Command::new("git")
+        .args(["branch", "--set-upstream-to", current_branch, branch_name])
+        .status()?;
 
     app.add_log(
         "INFO",
