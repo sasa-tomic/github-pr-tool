@@ -184,13 +184,13 @@ async fn run<B: Backend>(
         if update_pr {
             if current_branch == main_branch {
                 // When updating a PR on the main branch, create a new branch
-                git_checkout_new_branch(app, &branch_name, false)?;
+                git_checkout_new_branch(app, &branch_name, &current_branch, false)?;
                 current_branch = branch_name;
                 terminal.draw(|f| ui(f, app))?;
             }
         } else {
             // When not updating, always create a new branch
-            git_checkout_new_branch(app, &branch_name, false)?;
+            git_checkout_new_branch(app, &branch_name, &current_branch, false)?;
             app.add_log("INFO", format!("Created new branch: {branch_name}"));
             current_branch = branch_name;
             terminal.draw(|f| ui(f, app))?;

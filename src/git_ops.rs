@@ -273,7 +273,7 @@ pub fn git_fetch_main(
         let had_staged_changes = git_has_staged_changes()?;
         if had_staged_changes {
             app.add_log("INFO", "Staged changes detected, stashing in temp branch");
-            git_checkout_new_branch(app, AUTOCOMMIT_BRANCH_NAME, true)?;
+            git_checkout_new_branch(app, AUTOCOMMIT_BRANCH_NAME, current_branch, true)?;
             git_commit_staged_changes(app, "Temporary commit for stashing changes", &None)?;
             // Stash all other changes
             Command::new("git")
@@ -359,35 +359,85 @@ pub fn git_checkout_branch(
 pub fn git_checkout_new_branch(
     app: &mut App,
     branch_name: &str,
+    current_branch: &str,
     force_reset: bool,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let mut args = vec!["checkout"];
-    if force_reset {
-        args.push("-B");
-    } else {
-        let output = Command::new("git")
+    // 1. Refuse to clobber possibly pre-existing branch unless caller opted in
+    if !force_reset {
+        let exists = Command::new("git")
             .args(["rev-parse", "--verify", branch_name])
-            .output()?;
-        if output.status.success() {
-            let msg = format!("Branch {} already exists", branch_name);
-            app.add_error(msg.clone());
-            return Err(msg.into());
+            .status()?
+            .success();
+
+        if exists {
+            let e = format!(
+                "branch \"{branch_name}\" already exists (pass force_reset=true to rewrite)"
+            );
+            app.add_error(e.clone());
+            return Err(e.into());
         }
-        args.push("-b");
-    }
-    args.push(branch_name);
-
-    let output = Command::new("git").args(args).output()?;
-
-    if !output.status.success() {
-        app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
-        return Err("Failed to checkout new branch".into());
     }
 
-    app.add_log("INFO", format!("Checked out new branch: {}", branch_name));
-    Ok(String::from_utf8_lossy(output.stdout.as_slice()).to_string())
+    // 2. Figure out whether `current_branch` has an upstream remote
+    // Empty on detached HEAD or when no upstream is configured.
+    let upstream = {
+        let rev = format!("{current_branch}@{{upstream}}");
+        let out = Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", &rev])
+            .output()?;
+
+        if out.status.success() {
+            String::from_utf8_lossy(&out.stdout).trim().to_owned()
+        } else {
+            String::new()
+        }
+    };
+
+    // 3. Reset (or create) the branch at the latest tip of `current_branch`
+    // `-B` = create or move the branch; `--quiet` avoids noisy detaching output.
+    let status = Command::new("git")
+        .args(["checkout", "--quiet", "-B", branch_name, current_branch])
+        .status()?;
+
+    if !status.success() {
+        let e = "git checkout -B failed";
+        app.add_error(e);
+        return Err(e.into());
+    }
+
+    // 4. Configure tracking — remote if available, otherwise local
+    let status = if !upstream.is_empty() {
+        // Track the same remote as the source branch.
+        Command::new("git")
+            .args(["branch", "--set-upstream-to", &upstream, branch_name])
+            .status()?
+    } else {
+        // Track the local source branch.
+        Command::new("git")
+            .args(["branch", "--set-upstream-to", current_branch, branch_name])
+            .status()?
+    };
+
+    if !status.success() {
+        let e = "failed to set upstream";
+        app.add_error(e);
+        return Err(e.into());
+    }
+
+    app.add_log(
+        "INFO",
+        format!(
+            "Branch \"{branch_name}\" reset to \"{current_branch}\" and now tracks \"{}\"",
+            if upstream.is_empty() {
+                current_branch
+            } else {
+                &upstream
+            }
+        ),
+    );
+
+    Ok(branch_name.to_owned())
 }
-
 pub fn git_commit_staged_changes(
     app: &mut App,
     commit_title: &str,
