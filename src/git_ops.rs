@@ -2,12 +2,14 @@ use crate::tui::{render_message, App};
 use once_cell::sync::OnceCell;
 use ratatui::style::Color;
 use ratatui::{backend::Backend, Terminal};
+use std::error::Error;
 use std::{process::Command, sync::Mutex};
 
 const AUTOCOMMIT_BRANCH_NAME: &str = "gh-autopr-index-autocommit";
 const AUTOSTASH_NAME: &str = "gh-autopr-index-autostash";
+const MAX_DIFF_BYTES: usize = 200 * 1024; // 200 KiB
 
-pub fn git_ensure_in_repo(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
+pub fn git_ensure_in_repo(app: &mut App) -> Result<(), Box<dyn Error>> {
     let output = Command::new("git")
         .args(["rev-parse", "--is-inside-work-tree"])
         .output()?;
@@ -24,7 +26,7 @@ pub fn git_ensure_not_detached_head<B: Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
     branch_name: &String,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn Error>> {
     if branch_name == "HEAD" {
         app.add_log(
             "ERROR",
@@ -41,7 +43,7 @@ pub fn git_ensure_not_detached_head<B: Backend>(
     Ok(())
 }
 
-pub fn git_cd_to_repo_root(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
+pub fn git_cd_to_repo_root(app: &mut App) -> Result<(), Box<dyn Error>> {
     let output = Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
         .output()?;
@@ -58,35 +60,62 @@ pub fn git_cd_to_repo_root(app: &mut App) -> Result<(), Box<dyn std::error::Erro
     Ok(())
 }
 
-pub fn git_diff_uncommitted(app: &mut App) -> Result<String, Box<dyn std::error::Error>> {
-    let output = Command::new("git")
-        .args(["diff", "--cached", "--", ".", ":!*.lock"])
-        .output()?;
+/// Return either
+/// 1. the diff of staged/index changes against `merge_base` (or `HEAD`), or
+/// 2. if nothing is staged, the diff of **working-tree** changes against `merge_base`.
+///
+/// The result is truncated to `MAX_DIFF_BYTES` **on a character boundary**
+/// to keep it AI-friendly.
+pub fn git_diff_uncommitted(
+    app: &mut App,
+    current_branch: &String,
+) -> Result<String, Box<dyn Error>> {
+    let pathspec = ["--", ".", ":!*.lock"]; // exclude *.lock anywhere
 
-    if !output.status.success() {
-        app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
-        return Err("Failed to get diff".into());
+    // 1. staged changes first
+    if let Some(diff) = git_run_diff(app, true, &current_branch, &pathspec)? {
+        return Ok(truncate_utf8(&diff, MAX_DIFF_BYTES));
     }
 
-    let diff_context = String::from_utf8(output.stdout)?.trim().to_string();
+    // 2. otherwise fall back to working-tree changes
+    let diff = git_run_diff(app, false, &current_branch, &pathspec)?.unwrap_or_default(); // may be empty
+    Ok(truncate_utf8(&diff, MAX_DIFF_BYTES))
+}
 
-    if diff_context.is_empty() {
-        let output = Command::new("git")
-            .args(["diff", "--", ".", ":!*.lock"])
-            .output()?;
-
-        if !output.status.success() {
-            app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
-            return Err("Failed to get diff".into());
-        }
-
-        return Ok(String::from_utf8(output.stdout)?.trim().to_string());
+/// Helper: run `git diff`, returning `Ok(Some(diff))` if diff is non-empty.
+fn git_run_diff(
+    app: &mut App,
+    staged: bool,
+    base: &str,
+    pathspec: &[&str],
+) -> Result<Option<String>, Box<dyn Error>> {
+    let mut args = vec!["diff"];
+    if staged {
+        args.push("--staged"); // alias for `--cached`
     }
-    const MAX_DIFF_SIZE: usize = 200 * 1024; // 200KB limit, many AIs don't handle more than this
-    if diff_context.len() > MAX_DIFF_SIZE {
-        return Ok(diff_context[..MAX_DIFF_SIZE].to_string());
+    args.push(base);
+    args.extend_from_slice(pathspec);
+
+    let out = Command::new("git").args(&args).output()?;
+    if !out.status.success() {
+        app.add_error(String::from_utf8_lossy(&out.stderr).to_string());
+        return Err("git diff failed".into());
     }
-    Ok(diff_context)
+
+    let diff = String::from_utf8(out.stdout)?.trim().to_owned();
+    Ok(if diff.is_empty() { None } else { Some(diff) })
+}
+
+/// Truncate **without** splitting UTF-8 characters.
+fn truncate_utf8(s: &str, max_bytes: usize) -> String {
+    if s.len() <= max_bytes {
+        return s.to_owned();
+    }
+    let mut end = max_bytes;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    } // back up to char boundary
+    s[..end].to_owned()
 }
 
 /// Determines the base branch for comparing changes and generating diffs.
@@ -98,7 +127,7 @@ pub fn git_diff_between_branches(
     app: &mut App,
     main_branch: &str,
     current_branch: &String,
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> Result<String, Box<dyn Error>> {
     // First try to get base branch from existing PR
     let base_branch_output = Command::new("gh")
         .args([
@@ -215,7 +244,7 @@ pub fn git_diff_between_branches(
     Ok(String::from_utf8(output.stdout)?.trim().to_string())
 }
 
-pub fn git_main_branch(app: &mut App) -> Result<String, Box<dyn std::error::Error>> {
+pub fn git_main_branch(app: &mut App) -> Result<String, Box<dyn Error>> {
     let mut main_branch_output = Command::new("git")
         .args(["rev-parse", "--abbrev-ref", "origin/HEAD"])
         .output()?;
@@ -249,7 +278,7 @@ pub fn git_main_branch(app: &mut App) -> Result<String, Box<dyn std::error::Erro
     Ok(branch)
 }
 
-pub fn git_current_branch(app: &mut App) -> Result<String, Box<dyn std::error::Error>> {
+pub fn git_current_branch(app: &mut App) -> Result<String, Box<dyn Error>> {
     let output = Command::new("git")
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .output()?;
@@ -264,11 +293,121 @@ pub fn git_current_branch(app: &mut App) -> Result<String, Box<dyn std::error::E
     Ok(branch)
 }
 
+/// Guess the branch that `child` was forked from.
+///
+/// Behaviour
+/// ----------
+/// * If `child == primary`           → `Ok(primary)`
+/// * If `child` has an upstream set  → that upstream (unless it *is* `primary`)
+/// * Otherwise                       → the **nearest** local branch that is an
+///   ancestor of `child` (smallest commit distance).
+///
+/// This heuristic matches stacked-PR workflows where each new branch is created
+/// with `git switch -c <new> --track <parent>` or `git checkout -b <new> <parent>`.
+pub fn discover_parent_branch(
+    app: &mut App,
+    child: &str,
+    main_branch: &str, // usually "main" or "master"
+) -> Result<String, Box<dyn Error>> {
+    if child == main_branch {
+        return Ok(main_branch.to_owned());
+    }
+
+    // 1. explicit upstream, if configured
+    if let Some(up) = upstream_of(child)? {
+        if up != main_branch {
+            app.add_log("INFO", format!("Found upstream branch: {}", up));
+            return Ok(up);
+        }
+    }
+
+    // 2. fall back to “nearest ancestor” among local branches
+    let local_branches = for_each_local_ref()?;
+    let mut best: Option<(String, usize)> = None; // (branch, distance)
+
+    for cand in &local_branches {
+        if cand == child {
+            continue;
+        }
+
+        // Skip candidates that are not ancestors of `child`.
+        let is_ancestor = Command::new("git")
+            .args(["merge-base", "--is-ancestor", cand, child])
+            .status()?
+            .success();
+
+        if !is_ancestor {
+            continue;
+        }
+
+        // Distance = #commits child is ahead of cand.
+        let dist = commit_distance(cand, child)?;
+        match best {
+            Some((_, d)) if d <= dist => {} // keep closer branch
+            _ => best = Some((cand.clone(), dist)),
+        }
+    }
+
+    let result = if let Some((branch, _)) = best {
+        app.add_log("INFO", format!("Found parent branch: {}", branch));
+        branch
+    } else {
+        app.add_log("INFO", "No parent branch found, using main branch");
+        main_branch.to_owned()
+    };
+    Ok(result)
+}
+
+/* ─────────────────────────── helpers ─────────────────────────────────────── */
+
+// Upstream branch, if any (e.g. "origin/main" or "branch_a")
+fn upstream_of(branch: &str) -> Result<Option<String>, Box<dyn Error>> {
+    let spec = format!("{branch}@{{upstream}}");
+    let out = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", &spec])
+        .output()?;
+
+    if out.status.success() {
+        let up = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+        Ok(if up.is_empty() { None } else { Some(up) })
+    } else {
+        Ok(None)
+    }
+}
+
+// List local branch names (short form, no remotes)
+fn for_each_local_ref() -> Result<Vec<String>, Box<dyn Error>> {
+    let out = Command::new("git")
+        .args(["for-each-ref", "--format=%(refname:short)", "refs/heads/"])
+        .output()?;
+
+    if !out.status.success() {
+        return Err("git for-each-ref failed".into());
+    }
+    Ok(String::from_utf8(out.stdout)?
+        .lines()
+        .map(|s| s.to_owned())
+        .collect())
+}
+
+// Count commits reachable from `to` and not from `from`
+fn commit_distance(from: &str, to: &str) -> Result<usize, Box<dyn Error>> {
+    let range = format!("{from}..{to}");
+    let out = Command::new("git")
+        .args(["rev-list", "--count", &range])
+        .output()?;
+
+    if !out.status.success() {
+        return Err("git rev-list failed".into());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().parse()?)
+}
+
 pub fn git_fetch_main(
     app: &mut App,
     current_branch: &String,
     main_branch: &String,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn Error>> {
     if current_branch == main_branch {
         let had_staged_changes = git_has_staged_changes()?;
         if had_staged_changes {
@@ -339,10 +478,7 @@ pub fn git_fetch_main(
     Ok(())
 }
 
-pub fn git_checkout_branch(
-    app: &mut App,
-    branch_name: &str,
-) -> Result<String, Box<dyn std::error::Error>> {
+pub fn git_checkout_branch(app: &mut App, branch_name: &str) -> Result<String, Box<dyn Error>> {
     let output = Command::new("git")
         .args(["checkout", branch_name])
         .output()?;
@@ -361,7 +497,7 @@ pub fn git_checkout_new_branch(
     branch_name: &str,
     current_branch: &str,
     force_reset: bool,
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> Result<String, Box<dyn Error>> {
     // 1. Refuse to clobber possibly pre-existing branch unless caller opted in
     if !force_reset {
         let exists = Command::new("git")
@@ -442,7 +578,7 @@ pub fn git_commit_staged_changes(
     app: &mut App,
     commit_title: &str,
     commit_details: &Option<String>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn Error>> {
     let mut commit_message = commit_title.trim().to_string();
     if let Some(details) = commit_details {
         commit_message.push_str(&format!("\n\n{}", details.trim()));
@@ -460,7 +596,7 @@ pub fn git_commit_staged_changes(
     Ok(())
 }
 
-pub fn git_pull_branch(app: &mut App, branch_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub fn git_pull_branch(app: &mut App, branch_name: &str) -> Result<(), Box<dyn Error>> {
     let output = Command::new("git")
         .args(["pull", "origin", branch_name])
         .output()?;
@@ -474,7 +610,7 @@ pub fn git_pull_branch(app: &mut App, branch_name: &str) -> Result<(), Box<dyn s
     Ok(())
 }
 
-pub fn git_has_staged_changes() -> Result<bool, Box<dyn std::error::Error>> {
+pub fn git_has_staged_changes() -> Result<bool, Box<dyn Error>> {
     let output = Command::new("git")
         .args(["diff", "--cached", "--quiet"])
         .output()?;
@@ -482,7 +618,7 @@ pub fn git_has_staged_changes() -> Result<bool, Box<dyn std::error::Error>> {
     Ok(!output.status.success())
 }
 
-pub fn git_stash_pop_autostash_if_exists(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
+pub fn git_stash_pop_autostash_if_exists(app: &mut App) -> Result<(), Box<dyn Error>> {
     // List stashes with format showing only the message
     let output = Command::new("git")
         .args(["stash", "list", "--format=%gD:%gs"]) // %gD gives ref, %gs gives message
@@ -525,7 +661,7 @@ pub fn git_stage_and_commit(
     app: &mut App,
     commit_title: &str,
     commit_details: &Option<String>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn Error>> {
     if git_has_staged_changes()? {
         app.add_log("INFO", "Changes already staged, skipping git add");
     } else {
@@ -544,7 +680,7 @@ pub fn git_stage_and_commit(
     Ok(())
 }
 
-pub fn git_push_branch(app: &mut App, branch_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub fn git_push_branch(app: &mut App, branch_name: &str) -> Result<(), Box<dyn Error>> {
     // Check if branch already has upstream tracking
     let check_upstream = Command::new("git")
         .args(["rev-parse", "--abbrev-ref", &format!("{branch_name}@{{u}}")])
@@ -584,7 +720,7 @@ pub fn create_or_update_pull_request(
     body: &str,
     update_pr: bool,
     ready: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn Error>> {
     let current_branch = git_current_branch(app)?;
 
     // Check if PR exists and get base branch
@@ -740,7 +876,7 @@ pub fn create_or_update_pull_request(
   }
 ]
 */
-pub fn git_list_issues(app: &mut App) -> Result<String, Box<dyn std::error::Error>> {
+pub fn git_list_issues(app: &mut App) -> Result<String, Box<dyn Error>> {
     // Initialize cache if not already initialized
     let cache = ISSUES_CACHE.get_or_init(|| Mutex::new(None));
     let mut cache = cache.lock().unwrap();

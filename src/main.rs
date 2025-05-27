@@ -10,8 +10,8 @@ use clap::Parser;
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Update an existing PR instead of creating a new one
-    #[arg(long)]
-    update: bool,
+    #[arg(long, visible_aliases = ["update-existing", "update"])]
+    update_pr: bool,
 
     /// Create PR as ready for review instead of draft
     #[arg(long)]
@@ -44,7 +44,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut app = App::new("GitHub PR Auto-Submit");
     let tick_rate = Duration::from_millis(250);
-    let app_result = run(&mut terminal, &mut app, tick_rate, args.update, args.ready).await;
+    let app_result = run(
+        &mut terminal,
+        &mut app,
+        tick_rate,
+        args.update_pr,
+        args.ready,
+    )
+    .await;
 
     // restore terminal
     disable_raw_mode()?;
@@ -141,6 +148,11 @@ async fn run<B: Backend>(
     terminal.draw(|f| ui(f, app))?;
 
     let mut current_branch = git_current_branch(app)?;
+    let is_current_branch_main = current_branch == main_branch;
+    // If on main branch ==> current_branch_merge_base is None
+    // If not on main branch ==> current_branch_merge_base is the merge base with main
+    let current_branch_merge_base = discover_parent_branch(app, &current_branch, &main_branch)?;
+
     let original_branch = current_branch.clone();
     terminal.draw(|f| ui(f, app))?;
 
@@ -157,10 +169,20 @@ async fn run<B: Backend>(
     app.update_progress(0.3);
     terminal.draw(|f| ui(f, app))?;
 
-    let diff_uncommitted = git_diff_uncommitted(app)?;
+    let diff_uncommitted = git_diff_uncommitted(app, &current_branch)?;
     terminal.draw(|f| ui(f, app))?;
 
-    if !diff_uncommitted.is_empty() {
+    if diff_uncommitted.is_empty() {
+        if is_current_branch_main {
+            app.add_log("INFO", "No changes to commit.");
+            render_message(terminal, "Info", "No changes to commit.", Color::Cyan)?;
+            app.update_progress(1.0);
+            terminal.draw(|f| ui(f, app))?;
+            ui_update.abort();
+            run_event_loop(terminal, app, tick_rate, &mut last_tick)?;
+            return Ok(());
+        }
+    } else {
         app.update_details(diff_uncommitted.clone());
         terminal.draw(|f| ui(f, app))?;
 
@@ -172,7 +194,7 @@ async fn run<B: Backend>(
         app.add_log("INFO", "Generating branch name and commit description...");
         terminal.draw(|f| ui(f, app))?;
 
-        let (branch_name, commit_title, commit_details) =
+        let (generated_branch_name, commit_title, commit_details) =
             gpt_generate_branch_name_and_commit_description(
                 app,
                 diff_uncommitted,
@@ -181,44 +203,33 @@ async fn run<B: Backend>(
             .await?;
         terminal.draw(|f| ui(f, app))?;
 
-        if update_pr {
-            if current_branch == main_branch {
-                // When updating a PR on the main branch, create a new branch
-                git_checkout_new_branch(app, &branch_name, &current_branch, false)?;
-                current_branch = branch_name;
-                terminal.draw(|f| ui(f, app))?;
-            }
-        } else {
-            // When not updating, always create a new branch
-            git_checkout_new_branch(app, &branch_name, &current_branch, false)?;
-            app.add_log("INFO", format!("Created new branch: {branch_name}"));
-            current_branch = branch_name;
+        if is_current_branch_main || !update_pr {
+            // Always create a new branch if a) on main or b) not asked to update an existing PR
+            git_checkout_new_branch(app, &generated_branch_name, &current_branch, false)?;
+            app.add_log(
+                "INFO",
+                format!("Created new branch: {generated_branch_name}"),
+            );
+            current_branch = generated_branch_name;
             terminal.draw(|f| ui(f, app))?;
         }
+
         git_stage_and_commit(app, &commit_title, &commit_details)?;
         terminal.draw(|f| ui(f, app))?;
-    } else if current_branch == main_branch {
-        app.add_log("INFO", "No changes to commit.");
-        render_message(terminal, "Info", "No changes to commit.", Color::Cyan)?;
-        app.update_progress(1.0);
-        terminal.draw(|f| ui(f, app))?;
-        ui_update.abort();
-        run_event_loop(terminal, app, tick_rate, &mut last_tick)?;
-        return Ok(());
     }
 
-    let diff_between_branches = match git_diff_between_branches(app, &main_branch, &current_branch)
-    {
-        Ok(diff) => diff,
-        Err(err) => {
-            app.add_error(err.to_string());
-            app.switch_to_tab(1);
-            terminal.draw(|f| ui(f, app))?;
-            tokio::time::sleep(Duration::from_secs(2)).await;
-            app.should_quit = true;
-            return Err(err);
-        }
-    };
+    let diff_between_branches =
+        match git_diff_between_branches(app, &current_branch_merge_base, &current_branch) {
+            Ok(diff) => diff,
+            Err(err) => {
+                app.add_error(err.to_string());
+                app.switch_to_tab(1);
+                terminal.draw(|f| ui(f, app))?;
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                app.should_quit = true;
+                return Err(err);
+            }
+        };
     terminal.draw(|f| ui(f, app))?;
 
     if diff_between_branches.is_empty() {
