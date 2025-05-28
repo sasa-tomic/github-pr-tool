@@ -516,7 +516,7 @@ pub fn git_checkout_new_branch(
 
     // 2. Figure out whether `current_branch` has an upstream remote
     // Empty on detached HEAD or when no upstream is configured.
-    let upstream = {
+    let mut upstream_branch = {
         let rev = format!("{current_branch}@{{upstream}}");
         let out = Command::new("git")
             .args(["rev-parse", "--abbrev-ref", &rev])
@@ -542,19 +542,18 @@ pub fn git_checkout_new_branch(
     }
 
     // 4. Configure tracking — remote if available, otherwise local
-    Command::new("git")
-        .args(["branch", "--set-upstream-to", current_branch, branch_name])
-        .status()?;
+    if upstream_branch.is_empty() {
+        upstream_branch = format!("origin/{}", branch_name);
 
+        Command::new("git")
+            .args(["branch", "--set-upstream-to", &upstream_branch, branch_name])
+            .status()?;
+    }
     app.add_log(
         "INFO",
         format!(
-            "Branch \"{branch_name}\" reset to \"{current_branch}\" and now tracks \"{}\"",
-            if upstream.is_empty() {
-                current_branch
-            } else {
-                &upstream
-            }
+            "Branch \"{branch_name}\" reset to \"{current_branch}\" and tracks upstream \"{}\"",
+            &upstream_branch
         ),
     );
 
