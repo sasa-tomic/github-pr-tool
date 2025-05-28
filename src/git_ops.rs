@@ -552,7 +552,7 @@ pub fn git_checkout_new_branch(
     app.add_log(
         "INFO",
         format!(
-            "Branch \"{branch_name}\" reset to \"{current_branch}\" and tracks upstream \"{}\"",
+            "Branch \"{branch_name}\" reset to the tip of \"{current_branch}\" and set to track upstream \"{}\"",
             &upstream_branch
         ),
     );
