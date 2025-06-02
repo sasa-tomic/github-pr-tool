@@ -498,7 +498,7 @@ pub fn git_checkout_new_branch(
     current_branch: &str,
     force_reset: bool,
 ) -> Result<String, Box<dyn Error>> {
-    // 1. Refuse to clobber possibly pre-existing branch unless caller opted in
+    // Check if branch exists (unless force_reset is true)
     if !force_reset {
         let exists = Command::new("git")
             .args(["rev-parse", "--verify", branch_name])
@@ -514,47 +514,20 @@ pub fn git_checkout_new_branch(
         }
     }
 
-    // 2. Figure out whether `current_branch` has an upstream remote
-    // Empty on detached HEAD or when no upstream is configured.
-    let mut upstream_branch = {
-        let rev = format!("{current_branch}@{{upstream}}");
-        let out = Command::new("git")
-            .args(["rev-parse", "--abbrev-ref", &rev])
-            .output()?;
+    // Create or reset branch to current_branch's tip
+    let output = Command::new("git")
+        .args(["checkout", "-B", branch_name, current_branch])
+        .output()?;
 
-        if out.status.success() {
-            String::from_utf8_lossy(&out.stdout).trim().to_owned()
-        } else {
-            String::new()
-        }
-    };
-
-    // 3. Reset (or create) the branch at the latest tip of `current_branch`
-    // `-B` = create or move the branch; `--quiet` avoids noisy detaching output.
-    let status = Command::new("git")
-        .args(["checkout", "--quiet", "-B", branch_name, current_branch])
-        .status()?;
-
-    if !status.success() {
-        let e = "git checkout -B failed";
-        app.add_error(e);
-        return Err(e.into());
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr).to_string();
+        app.add_error(err.clone());
+        return Err(err.into());
     }
 
-    // 4. Configure tracking — remote if available, otherwise local
-    if upstream_branch.is_empty() {
-        upstream_branch = format!("origin/{}", branch_name);
-
-        Command::new("git")
-            .args(["branch", "--set-upstream-to", &upstream_branch, branch_name])
-            .status()?;
-    }
     app.add_log(
         "INFO",
-        format!(
-            "Branch \"{branch_name}\" reset to the tip of \"{current_branch}\" and set to track upstream \"{}\"",
-            &upstream_branch
-        ),
+        format!("Created branch \"{branch_name}\" from \"{current_branch}\""),
     );
 
     Ok(branch_name.to_owned())
