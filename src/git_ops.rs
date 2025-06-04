@@ -122,7 +122,7 @@ fn truncate_utf8(s: &str, max_bytes: usize) -> String {
 /// Fallback: Uses the repository's main branch
 pub fn git_diff_between_branches(
     app: &mut App,
-    main_branch: &str,
+    parent_branch: &str,
     current_branch: &String,
 ) -> Result<String, Box<dyn Error>> {
     // First try to get base branch from existing PR
@@ -167,6 +167,7 @@ pub fn git_diff_between_branches(
                 if parent_branch_output.status.success() {
                     let parent = String::from_utf8(parent_branch_output.stdout)?
                         .trim()
+                        .trim_start_matches("origin/")
                         .to_string();
                     if !parent.is_empty() {
                         app.add_log("INFO", format!("Using parent branch {} for diff", parent));
@@ -174,16 +175,19 @@ pub fn git_diff_between_branches(
                     } else {
                         app.add_error(format!(
                             "Found invalid empty parent branch, using {} instead",
-                            main_branch
+                            parent_branch
                         ));
-                        main_branch.to_owned()
+                        parent_branch.to_owned()
                     }
                 } else {
-                    app.add_error(format!(
-                        "No parent branch found, using {} branch",
-                        main_branch
-                    ));
-                    main_branch.to_owned()
+                    app.add_log(
+                        "WARN",
+                        format!(
+                            "No parent branch marked in git, using branch {}",
+                            parent_branch
+                        ),
+                    );
+                    parent_branch.to_owned()
                 }
             }
         } else {
@@ -199,19 +203,20 @@ pub fn git_diff_between_branches(
             if parent_branch_output.status.success() {
                 let parent = String::from_utf8(parent_branch_output.stdout)?
                     .trim()
+                    .trim_start_matches("origin/")
                     .to_string();
                 if !parent.is_empty() {
                     app.add_log("INFO", format!("Using parent branch {} for diff", parent));
                     parent
                 } else {
-                    main_branch.to_owned()
+                    parent_branch.to_owned()
                 }
             } else {
-                main_branch.to_owned()
+                parent_branch.to_owned()
             }
         }
     } else {
-        main_branch.to_owned()
+        parent_branch.to_owned()
     };
 
     app.add_log(
@@ -303,8 +308,8 @@ pub fn git_current_branch(app: &mut App) -> Result<String, Box<dyn Error>> {
 /// with `git switch -c <new> --track <parent>` or `git checkout -b <new> <parent>`.
 pub fn discover_parent_branch(
     app: &mut App,
-    child: &str,
     main_branch: &str, // usually "main" or "master"
+    child: &str,
 ) -> Result<String, Box<dyn Error>> {
     if child == main_branch {
         return Ok(main_branch.to_owned());
@@ -365,7 +370,10 @@ fn upstream_of(branch: &str) -> Result<Option<String>, Box<dyn Error>> {
         .output()?;
 
     if out.status.success() {
-        let up = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+        let up = String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .trim_start_matches("origin/")
+            .to_owned();
         Ok(if up.is_empty() { None } else { Some(up) })
     } else {
         Ok(None)
@@ -645,7 +653,7 @@ pub fn git_push_branch(app: &mut App, branch_name: &str) -> Result<(), Box<dyn E
     let mut push_args = vec!["push"];
 
     if !has_upstream {
-        // If no upstream exists, set it up with -u flag
+        // If no upstream exists, set it up with the --set-upstream flag
         push_args.extend(["--set-upstream", "origin", branch_name]);
         app.add_log("INFO", "Setting up upstream tracking branch");
     } else {

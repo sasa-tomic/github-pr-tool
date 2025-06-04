@@ -151,7 +151,7 @@ async fn run<B: Backend>(
     let is_current_branch_main = current_branch == main_branch;
     // If on main branch ==> current_branch_merge_base is None
     // If not on main branch ==> current_branch_merge_base is the merge base with main
-    let current_branch_merge_base = discover_parent_branch(app, &current_branch, &main_branch)?;
+    let current_branch_merge_base = discover_parent_branch(app, &main_branch, &current_branch)?;
 
     let original_branch = current_branch.clone();
     terminal.draw(|f| ui(f, app))?;
