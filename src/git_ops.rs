@@ -66,19 +66,16 @@ pub fn git_cd_to_repo_root(app: &mut App) -> Result<(), Box<dyn Error>> {
 ///
 /// The result is truncated to `MAX_DIFF_BYTES` **on a character boundary**
 /// to keep it AI-friendly.
-pub fn git_diff_uncommitted(
-    app: &mut App,
-    current_branch: &String,
-) -> Result<String, Box<dyn Error>> {
+pub fn git_diff_uncommitted(app: &mut App, current_branch: &str) -> Result<String, Box<dyn Error>> {
     let pathspec = ["--", ".", ":!*.lock"]; // exclude *.lock anywhere
 
     // 1. staged changes first
-    if let Some(diff) = git_run_diff(app, true, &current_branch, &pathspec)? {
+    if let Some(diff) = git_run_diff(app, true, current_branch, &pathspec)? {
         return Ok(truncate_utf8(&diff, MAX_DIFF_BYTES));
     }
 
     // 2. otherwise fall back to working-tree changes
-    let diff = git_run_diff(app, false, &current_branch, &pathspec)?.unwrap_or_default(); // may be empty
+    let diff = git_run_diff(app, false, current_branch, &pathspec)?.unwrap_or_default(); // may be empty
     Ok(truncate_utf8(&diff, MAX_DIFF_BYTES))
 }
 
