@@ -283,6 +283,8 @@ async fn run<B: Backend>(
         &commit_details.unwrap_or_default(),
         update_pr,
         ready,
+        &current_branch_merge_base,
+        &current_branch,
     ) {
         Ok(_) => {
             app.add_log("INFO", "Pull request created/updated successfully.");
