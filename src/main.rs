@@ -65,14 +65,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         String::from_utf8_lossy(&output.stdout).trim().to_string()
     };
 
-    // Initialize the terminal
-    enable_raw_mode()?;
-    let mut stdout = std::io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-    terminal.clear()?;
-
     // Setup for ctrl+c handling
     let notify = Arc::new(Notify::new());
     let notify_clone = notify.clone();
@@ -89,6 +81,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         notify_clone.notify_one();
         std::process::exit(130);
     });
+
+    // Initialize the terminal
+    enable_raw_mode()?;
+    let mut stdout = std::io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+    terminal.clear()?;
 
     let mut app = App::new("GitHub PR Auto-Submit");
     let tick_rate = Duration::from_millis(250);
