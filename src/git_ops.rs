@@ -104,7 +104,7 @@ fn git_run_diff(
 }
 
 /// Truncate **without** splitting UTF-8 characters.
-fn truncate_utf8(s: &str, max_bytes: usize) -> String {
+pub fn truncate_utf8(s: &str, max_bytes: usize) -> String {
     if s.len() <= max_bytes {
         return s.to_owned();
     }
@@ -323,7 +323,7 @@ pub fn discover_parent_branch(
         }
     }
 
-    // 2. fall back to “nearest ancestor” among local branches
+    // 2. fall back to "nearest ancestor" among local branches
     let local_branches = for_each_local_ref()?;
     let mut best: Option<(String, usize)> = None; // (branch, distance)
 
@@ -843,3 +843,7 @@ pub fn git_list_issues(app: &mut App) -> Result<String, Box<dyn Error>> {
 }
 
 static ISSUES_CACHE: OnceCell<Mutex<Option<String>>> = OnceCell::new();
+
+#[cfg(test)]
+#[path = "git_ops/tests.rs"]
+mod tests;

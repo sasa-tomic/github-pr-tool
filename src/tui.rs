@@ -225,3 +225,7 @@ pub fn render_message<B: Backend>(
     })?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "tui/tests.rs"]
+mod tests;
