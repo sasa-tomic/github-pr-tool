@@ -1,14 +1,185 @@
 use crate::tui::{render_message, App};
+use chrono::Utc;
 use once_cell::sync::OnceCell;
 use ratatui::style::Color;
 use ratatui::{backend::Backend, Terminal};
 use std::error::Error;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 
 const AUTOCOMMIT_BRANCH_NAME: &str = "gh-autopr-index-autocommit";
 const AUTOSTASH_NAME: &str = "gh-autopr-index-autostash";
 const MAX_DIFF_BYTES: usize = 200 * 1024; // 200 KiB
+
+/// RAII guard for the temp worktree
+pub struct TempWorktree {
+    path: PathBuf,
+    orig_root: PathBuf,
+    orig_branch: String,
+    tmp_branch: String,
+}
+
+impl TempWorktree {
+    /// Enter a detached worktree that lives in `.git/autopr-wt-<uuid>`.
+    pub fn enter() -> Result<Self, Box<dyn Error>> {
+        // 1. capture original location + branch + changes ------------------------
+        let orig_root = PathBuf::from(
+            String::from_utf8(
+                Command::new("git")
+                    .args(["rev-parse", "--show-toplevel"])
+                    .output()?
+                    .stdout,
+            )?
+            .trim(),
+        );
+        let orig_branch = String::from_utf8(
+            Command::new("git")
+                .args(["rev-parse", "--abbrev-ref", "HEAD"])
+                .output()?
+                .stdout,
+        )?
+        .trim()
+        .to_owned();
+
+        let staged_patch = Command::new("git")
+            .args(["diff", "--staged", "--binary"])
+            .output()?
+            .stdout;
+        let unstaged_patch = Command::new("git")
+            .args(["diff", "--binary"])
+            .output()?
+            .stdout;
+        let untracked_list = String::from_utf8(
+            Command::new("git")
+                .args(["ls-files", "--others", "--exclude-standard", "-z"])
+                .output()?
+                .stdout,
+        )?;
+
+        // 2. construct a path on the *same* filesystem (inside .git) -------------
+        let git_dir = PathBuf::from(
+            String::from_utf8(
+                Command::new("git")
+                    .args(["rev-parse", "--git-dir"])
+                    .output()?
+                    .stdout,
+            )?
+            .trim(),
+        );
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_millis();
+        let path = git_dir.join(format!("autopr-wt-{}", ts));
+
+        // 3. create detached worktree at HEAD ------------------------------------
+        let out = Command::new("git")
+            .args(["worktree", "add", "--detach", path.to_str().unwrap()])
+            .output()?;
+        if !out.status.success() {
+            return Err(format!(
+                "git worktree add failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            )
+            .into());
+        }
+
+        // 4. hop into that directory --------------------------------------------
+        std::env::set_current_dir(&path)?;
+
+        // 5. create a throw-away branch so we are **not** detached ---------------
+        let tmp_branch = format!("autopr-sandbox-{}", Utc::now().timestamp_millis());
+        let out = Command::new("git")
+            .args(["switch", "-c", &tmp_branch])
+            .output()?;
+        if !out.status.success() {
+            return Err(format!(
+                "failed to switch to temp branch {tmp_branch}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            )
+            .into());
+        }
+
+        // ── 6. replay the dirty state inside the temp work-tree ────────────────
+
+        // 6a. staged patch → index only
+        if !staged_patch.is_empty() {
+            let mut child = Command::new("git")
+                .args(["apply", "--cached", "-"])
+                .stdin(std::process::Stdio::piped())
+                .spawn()?;
+            child.stdin.as_mut().unwrap().write_all(&staged_patch)?;
+            if !child.wait()?.success() {
+                return Err("failed to apply staged patch".into());
+            }
+        }
+
+        // 6b. unstaged patch → working tree
+        if !unstaged_patch.is_empty() {
+            let mut child = Command::new("git")
+                .args(["apply", "-"])
+                .stdin(std::process::Stdio::piped())
+                .spawn()?;
+            child.stdin.as_mut().unwrap().write_all(&unstaged_patch)?;
+            if !child.wait()?.success() {
+                return Err("failed to apply unstaged patch".into());
+            }
+        }
+
+        // 6c. untracked files
+        if !untracked_list.is_empty() {
+            for path in untracked_list.split('\0').filter(|p| !p.is_empty()) {
+                let from = orig_root.join(path);
+                let to = path; // relative inside temp WT
+                if let Some(parent) = Path::new(to).parent() {
+                    fs_err::create_dir_all(parent)?;
+                }
+                fs_err::copy(&from, to)?;
+            }
+        }
+
+        // All done – temp work-tree now has *exact* dirty state.
+        Ok(Self {
+            path,
+            orig_root,
+            orig_branch,
+            tmp_branch,
+        })
+    }
+}
+
+impl Drop for TempWorktree {
+    fn drop(&mut self) {
+        // 1. hop back to the original worktree (ignore errors to stay unwind-safe)
+        let _ = std::env::set_current_dir(&self.orig_root);
+
+        // 2. if we’re detached, return to the original branch
+        let is_detached = Command::new("git")
+            .args(["symbolic-ref", "--quiet", "HEAD"])
+            .status()
+            .map(|s| !s.success())
+            .unwrap_or(false);
+
+        if is_detached {
+            let _ = Command::new("git")
+                .args(["switch", &self.orig_branch])
+                .status();
+        }
+
+        // 3. remove the temporary worktree
+        let _ = Command::new("git")
+            .args(["worktree", "remove", "--force", self.path.to_str().unwrap()])
+            .status();
+
+        let _ = fs_err::remove_dir_all(&self.path); // belt-and-suspenders
+
+        // 4. drop the throw-away branch so the repo stays clean
+        let _ = Command::new("git")
+            .args(["branch", "-D", &self.tmp_branch])
+            .status();
+    }
+}
 
 pub fn git_ensure_in_repo(app: &mut App) -> Result<(), Box<dyn Error>> {
     let output = Command::new("git")
@@ -848,19 +1019,3 @@ static ISSUES_CACHE: OnceCell<Mutex<Option<String>>> = OnceCell::new();
 #[cfg(test)]
 #[path = "git_ops/tests.rs"]
 mod tests;
-
-/// Reset the repository to a specific commit hash (hard reset).
-pub fn git_reset_hard_to_commit(commit_hash: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let output = Command::new("git")
-        .args(["reset", "--hard", commit_hash])
-        .output()?;
-    if !output.status.success() {
-        return Err(format!(
-            "Failed to reset to commit {}: {}",
-            commit_hash,
-            String::from_utf8_lossy(&output.stderr)
-        )
-        .into());
-    }
-    Ok(())
-}
