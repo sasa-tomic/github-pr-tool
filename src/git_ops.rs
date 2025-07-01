@@ -3,7 +3,8 @@ use once_cell::sync::OnceCell;
 use ratatui::style::Color;
 use ratatui::{backend::Backend, Terminal};
 use std::error::Error;
-use std::{process::Command, sync::Mutex};
+use std::process::Command;
+use std::sync::Mutex;
 
 const AUTOCOMMIT_BRANCH_NAME: &str = "gh-autopr-index-autocommit";
 const AUTOSTASH_NAME: &str = "gh-autopr-index-autostash";
@@ -847,3 +848,19 @@ static ISSUES_CACHE: OnceCell<Mutex<Option<String>>> = OnceCell::new();
 #[cfg(test)]
 #[path = "git_ops/tests.rs"]
 mod tests;
+
+/// Reset the repository to a specific commit hash (hard reset).
+pub fn git_reset_hard_to_commit(commit_hash: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let output = Command::new("git")
+        .args(["reset", "--hard", commit_hash])
+        .output()?;
+    if !output.status.success() {
+        return Err(format!(
+            "Failed to reset to commit {}: {}",
+            commit_hash,
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into());
+    }
+    Ok(())
+}

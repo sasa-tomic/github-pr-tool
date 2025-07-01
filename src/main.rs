@@ -44,12 +44,26 @@ use ratatui::{
     style::Color,
     Terminal,
 };
+use std::sync::Arc;
+use tokio::sync::Notify;
 use tokio::time::{Duration, Instant};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse command line arguments
     let args = Args::parse();
+
+    // Record the current HEAD commit hash for possible revert
+    let original_head = {
+        let output = std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .output()?;
+        if !output.status.success() {
+            eprintln!("Failed to get current HEAD commit hash");
+            std::process::exit(1);
+        }
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    };
 
     // Initialize the terminal
     enable_raw_mode()?;
@@ -58,6 +72,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
+
+    // Setup for ctrl+c handling
+    let notify = Arc::new(Notify::new());
+    let notify_clone = notify.clone();
+    let original_head_clone = original_head.clone();
+
+    // Spawn a background task to handle ctrl+c
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c().await.ok();
+        // Attempt to revert the repo
+        if let Err(e) = crate::git_ops::git_reset_hard_to_commit(&original_head_clone) {
+            eprintln!("Failed to revert repository: {}", e);
+        }
+        eprintln!("\nInterrupted. Repository reverted to original state.");
+        notify_clone.notify_one();
+        std::process::exit(130);
+    });
 
     let mut app = App::new("GitHub PR Auto-Submit");
     let tick_rate = Duration::from_millis(250);
