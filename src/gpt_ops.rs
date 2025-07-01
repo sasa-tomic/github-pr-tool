@@ -8,14 +8,15 @@ pub async fn gpt_generate_branch_name_and_commit_description(
     app: &mut App<'_>,
     diff_context: String,
     issues_json: Option<String>,
+    what_arg: Option<String>,
+    why_arg: Option<String>,
+    bigger_picture_arg: Option<String>,
 ) -> Result<(String, String, Option<String>), Box<dyn std::error::Error>> {
     const MAX_ISSUES_LEN: usize = 16 * 1024; // 16K characters limit for issues
     let credentials = Credentials::from_env();
-    let messages = vec![
-        ChatCompletionMessage {
-            role: ChatCompletionMessageRole::System,
-            content: Some(
-"You are a helpful assistant that helps to prepare GitHub Pull Requests.
+
+    let mut system_message_content = String::from(
+        "You are a helpful assistant that helps to prepare GitHub Pull Requests.
 You will provide output in JSON format with EXACTLY the following keys: 'branch_name', 'commit_title', and 'commit_details'.
 For a very small PR return 'commit_details' as null, otherwise politely in a well structured markdown format describe all major changes for the PR. The description should include the section 'What', 'Why', and 'Bigger Picture'. Leave a TODO for the sections where you do not have enough information to fill them in. Do not invent information if you cannot extrapolate it from the provided input.
 If there is a breaking change, add the 'impact' section.
@@ -43,8 +44,26 @@ If there are changes in comments or tests mention such changes with a single lin
 
 Ensure clarity by avoiding redundant or overly elaborate expressions. Always be concise and to the point.
 Make sure that there is NO REDUNDANT or obvious information in the description. Ensure that every word in the description is necessary and adds value.
-".to_string(),
-            ),
+"
+    );
+
+    if let Some(what) = what_arg.clone() {
+        system_message_content.push_str(&format!("\n\nUser provided 'what': {}", what));
+    }
+    if let Some(why) = why_arg.clone() {
+        system_message_content.push_str(&format!("\n\nUser provided 'why': {}", why));
+    }
+    if let Some(bigger_picture) = bigger_picture_arg.clone() {
+        system_message_content.push_str(&format!(
+            "\n\nUser provided 'bigger picture': {}",
+            bigger_picture
+        ));
+    }
+
+    let messages = vec![
+        ChatCompletionMessage {
+            role: ChatCompletionMessageRole::System,
+            content: Some(system_message_content),
             ..Default::default()
         },
         ChatCompletionMessage {
