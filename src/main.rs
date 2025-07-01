@@ -37,7 +37,10 @@ struct Args {
 use ratatui::{
     backend::{Backend, CrosstermBackend},
     crossterm::{
-        event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
+        event::{
+            self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind,
+            KeyModifiers,
+        },
         execute,
         terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     },
@@ -65,7 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         String::from_utf8_lossy(&output.stdout).trim().to_string()
     };
 
-    // Setup for ctrl+c handling
+    // Setup for ctrl+c handling BEFORE enabling raw mode
     let notify = Arc::new(Notify::new());
     let notify_clone = notify.clone();
     let original_head_clone = original_head.clone();
@@ -73,6 +76,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Spawn a background task to handle ctrl+c
     tokio::spawn(async move {
         tokio::signal::ctrl_c().await.ok();
+        // Disable raw mode first to restore normal terminal behavior
+        let _ = disable_raw_mode();
+        let _ = execute!(std::io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
         // Attempt to revert the repo
         if let Err(e) = crate::git_ops::git_reset_hard_to_commit(&original_head_clone) {
             eprintln!("Failed to revert repository: {}", e);
@@ -82,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(130);
     });
 
-    // Initialize the terminal
+    // Initialize the terminal AFTER setting up signal handling
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -114,6 +120,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     terminal.show_cursor()?;
 
     if let Err(e) = app_result {
+        // Check if this was a user interruption
+        if e.to_string().contains("Interrupted by user") {
+            // Attempt to revert the repo
+            if let Err(revert_err) = crate::git_ops::git_reset_hard_to_commit(&original_head) {
+                eprintln!("Failed to revert repository: {}", revert_err);
+            } else {
+                eprintln!("Repository reverted to original state.");
+            }
+        }
         eprintln!("ERROR in execution: {}", e);
     }
     // Print logs and errors after terminal is restored
@@ -400,6 +415,13 @@ fn run_event_loop<B: Backend>(
                         KeyCode::Left => app.on_left(),
                         KeyCode::Right => app.on_right(),
                         KeyCode::Char('q') => app.should_quit = true,
+                        KeyCode::Char('c')
+                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                        {
+                            // Handle Ctrl+C
+                            app.should_quit = true;
+                            return Err("Interrupted by user".into());
+                        }
                         _ => {}
                     }
                 }
