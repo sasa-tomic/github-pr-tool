@@ -7,7 +7,12 @@ use crate::tui::*;
 use clap::Parser;
 
 #[derive(Parser)]
-#[command(author, version, about, long_about = None)]
+#[command(
+    author,
+    version,
+    about = "gh-autopr: Automate GitHub Pull Request creation.",
+    long_about = "gh-autopr is a command-line tool that automates the process of creating GitHub Pull Requests. It analyzes your uncommitted changes, generates a branch name, commit message, and PR description using AI, and then pushes the changes and creates the PR."
+)]
 struct Args {
     /// Update an existing PR instead of creating a new one
     #[arg(long, visible_aliases = ["update-existing", "update"])]
@@ -16,6 +21,18 @@ struct Args {
     /// Create PR as ready for review instead of draft
     #[arg(long)]
     ready: bool,
+
+    /// What changes are included in this PR?
+    #[arg(long)]
+    what: Option<String>,
+
+    /// Why are these changes necessary?
+    #[arg(long)]
+    why: Option<String>,
+
+    /// How do these changes fit into the bigger picture?
+    #[arg(long, visible_aliases = ["bigger-picture", "biggerpicture", "context", "overview"])]
+    bigger_picture: Option<String>,
 }
 use ratatui::{
     backend::{Backend, CrosstermBackend},
@@ -50,6 +67,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tick_rate,
         args.update_pr,
         args.ready,
+        args.what,
+        args.why,
+        args.bigger_picture,
     )
     .await;
 
@@ -79,6 +99,9 @@ async fn run<B: Backend>(
     tick_rate: Duration,
     update_pr: bool,
     ready: bool,
+    what: Option<String>,
+    why: Option<String>,
+    bigger_picture: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut last_tick = Instant::now();
 
@@ -199,6 +222,9 @@ async fn run<B: Backend>(
                 app,
                 diff_uncommitted,
                 Some(issues_json),
+                what.clone(),
+                why.clone(),
+                bigger_picture.clone(),
             )
             .await?;
         terminal.draw(|f| ui(f, app))?;
@@ -253,6 +279,9 @@ async fn run<B: Backend>(
         app,
         diff_between_branches,
         Some(issues_json),
+        what,
+        why,
+        bigger_picture,
     )
     .await?;
     app.add_log("INFO", format!("Commit title: {commit_title}"));
