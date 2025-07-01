@@ -47,7 +47,7 @@ use ratatui::{
     style::Color,
     Terminal,
 };
-use std::sync::Arc;
+use std::sync::{atomic::AtomicBool, Arc};
 use tokio::sync::Notify;
 use tokio::time::{Duration, Instant};
 
@@ -68,14 +68,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         String::from_utf8_lossy(&output.stdout).trim().to_string()
     };
 
-    // Setup for ctrl+c handling BEFORE enabling raw mode
+    // Setup for ctrl+c handling
+    let cancelled = Arc::new(AtomicBool::new(false));
     let notify = Arc::new(Notify::new());
     let notify_clone = notify.clone();
+    let cancelled_clone = cancelled.clone();
     let original_head_clone = original_head.clone();
 
     // Spawn a background task to handle ctrl+c
     tokio::spawn(async move {
         tokio::signal::ctrl_c().await.ok();
+        cancelled_clone.store(true, std::sync::atomic::Ordering::Relaxed);
         // Disable raw mode first to restore normal terminal behavior
         let _ = disable_raw_mode();
         let _ = execute!(std::io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
@@ -107,6 +110,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.what,
         args.why,
         args.bigger_picture,
+        cancelled.clone(),
     )
     .await;
 
@@ -148,7 +152,17 @@ async fn run<B: Backend>(
     what: Option<String>,
     why: Option<String>,
     bigger_picture: Option<String>,
+    cancelled: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Macro to check for cancellation
+    macro_rules! check_cancelled {
+        () => {
+            if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err("Interrupted by user".into());
+            }
+        };
+    }
+
     let mut last_tick = Instant::now();
 
     // Start UI loop immediately to show initialization progress
@@ -166,6 +180,7 @@ async fn run<B: Backend>(
 
     // Initial UI render
     terminal.draw(|f| ui(f, app))?;
+    check_cancelled!();
 
     let api_key = match keyring::Entry::new("gh-autopr", "openai_key") {
         Ok(entry) => match entry.get_password() {
@@ -209,12 +224,15 @@ async fn run<B: Backend>(
 
     git_ensure_in_repo(app)?;
     terminal.draw(|f| ui(f, app))?;
+    check_cancelled!();
 
     git_cd_to_repo_root(app)?;
     terminal.draw(|f| ui(f, app))?;
+    check_cancelled!();
 
     let main_branch = git_main_branch(app).unwrap_or_else(|_| "main".to_string());
     terminal.draw(|f| ui(f, app))?;
+    check_cancelled!();
 
     let mut current_branch = git_current_branch(app)?;
     let is_current_branch_main = current_branch == main_branch;
@@ -257,11 +275,13 @@ async fn run<B: Backend>(
 
         app.add_log("INFO", "Fetching GitHub issues...");
         terminal.draw(|f| ui(f, app))?;
+        check_cancelled!();
 
         let issues_json = git_list_issues(app)?;
 
         app.add_log("INFO", "Generating branch name and commit description...");
         terminal.draw(|f| ui(f, app))?;
+        check_cancelled!();
 
         let (generated_branch_name, commit_title, commit_details) =
             gpt_generate_branch_name_and_commit_description(
@@ -273,6 +293,7 @@ async fn run<B: Backend>(
                 bigger_picture.clone(),
             )
             .await?;
+        check_cancelled!();
         terminal.draw(|f| ui(f, app))?;
 
         if is_current_branch_main || !update_pr {
@@ -315,9 +336,11 @@ async fn run<B: Backend>(
     app.add_log("INFO", "Generating PR details using AI...");
     app.update_progress(0.5);
     terminal.draw(|f| ui(f, app))?;
+    check_cancelled!();
 
     app.add_log("INFO", "Fetching GitHub issues...");
     terminal.draw(|f| ui(f, app))?;
+    check_cancelled!();
 
     let issues_json = git_list_issues(app)?;
 
@@ -330,6 +353,7 @@ async fn run<B: Backend>(
         bigger_picture,
     )
     .await?;
+    check_cancelled!();
     app.add_log("INFO", format!("Commit title: {commit_title}"));
     app.add_log(
         "INFO",
@@ -342,11 +366,13 @@ async fn run<B: Backend>(
 
     git_push_branch(app, &current_branch)?;
     terminal.draw(|f| ui(f, app))?;
+    check_cancelled!();
 
     app.add_log("INFO", format!("Commit title: {commit_title}"));
     app.add_log("INFO", "Creating pull request...");
     app.update_progress(0.8);
     terminal.draw(|f| ui(f, app))?;
+    check_cancelled!();
     if update_pr {
         app.add_log("INFO", "Updating existing pull request...");
     } else {
@@ -415,9 +441,7 @@ fn run_event_loop<B: Backend>(
                         KeyCode::Left => app.on_left(),
                         KeyCode::Right => app.on_right(),
                         KeyCode::Char('q') => app.should_quit = true,
-                        KeyCode::Char('c')
-                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
-                        {
+                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             // Handle Ctrl+C
                             app.should_quit = true;
                             return Err("Interrupted by user".into());
