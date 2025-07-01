@@ -18,7 +18,6 @@ pub struct TempWorktree {
     path: PathBuf,
     orig_root: PathBuf,
     orig_branch: String,
-    tmp_branch: String,
 }
 
 impl TempWorktree {
@@ -88,17 +87,57 @@ impl TempWorktree {
         // 4. hop into that directory --------------------------------------------
         std::env::set_current_dir(&path)?;
 
-        // 5. create a throw-away branch so we are **not** detached ---------------
-        let tmp_branch = format!("autopr-sandbox-{}", Utc::now().timestamp_millis());
-        let out = Command::new("git")
-            .args(["switch", "-c", &tmp_branch])
-            .output()?;
-        if !out.status.success() {
-            return Err(format!(
-                "failed to switch to temp branch {tmp_branch}: {}",
-                String::from_utf8_lossy(&out.stderr)
-            )
-            .into());
+        // 5. make the worktree point at the **same branch name** the user had.
+        //    Use --force so this works even if that branch is already active
+        //    in another worktree.
+        //
+        //    ① direct switch (branch exists locally)          ───────────────────
+        //    ② otherwise try to track the remote branch       ───────────────────
+        //    ③ as last resort create an *orphan* local branch ───────────────────
+        let mut ok = Command::new("git")
+            .args([
+                "switch",
+                "--force",
+                "--ignore-other-worktrees",
+                &orig_branch,
+            ]) // <-- --force here
+            .status()?
+            .success();
+
+        if !ok {
+            // remote may exist – create local branch that tracks it
+            ok = Command::new("git")
+                .args([
+                    "switch",
+                    "--force", // allow switching to a branch that already exists
+                    "--ignore-other-worktrees",
+                    "-c",
+                    &orig_branch,
+                    "--track",
+                    &format!("origin/{}", orig_branch),
+                ])
+                .status()?
+                .success();
+        }
+
+        if !ok {
+            // last resort: create orphaned branch with same name
+            let out = Command::new("git")
+                .args([
+                    "switch",
+                    "--force",
+                    "--ignore-other-worktrees",
+                    "-c",
+                    &orig_branch,
+                ])
+                .output()?;
+            if !out.status.success() {
+                return Err(format!(
+                    "failed to switch to temp branch {orig_branch}: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                )
+                .into());
+            }
         }
 
         // ── 6. replay the dirty state inside the temp work-tree ────────────────
@@ -144,7 +183,6 @@ impl TempWorktree {
             path,
             orig_root,
             orig_branch,
-            tmp_branch,
         })
     }
 }
@@ -173,11 +211,6 @@ impl Drop for TempWorktree {
             .status();
 
         let _ = fs_err::remove_dir_all(&self.path); // belt-and-suspenders
-
-        // 4. drop the throw-away branch so the repo stays clean
-        let _ = Command::new("git")
-            .args(["branch", "-D", &self.tmp_branch])
-            .status();
     }
 }
 
