@@ -37,7 +37,10 @@ struct Args {
 use ratatui::{
     backend::{Backend, CrosstermBackend},
     crossterm::{
-        event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
+        event::{
+            self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind,
+            KeyModifiers,
+        },
         execute,
         terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     },
@@ -51,7 +54,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse command line arguments
     let args = Args::parse();
 
-    // Initialize the terminal
+    // All subsequent Git commands act inside the isolated worktree, that is automatically cleaned up.
+    let _tw = TempWorktree::enter()?;
+
+    // Initialize the terminal AFTER setting up signal handling
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -120,6 +126,7 @@ async fn run<B: Backend>(
 
     // Initial UI render
     terminal.draw(|f| ui(f, app))?;
+    check_events(terminal, app, tick_rate, &mut last_tick)?;
 
     let api_key = match keyring::Entry::new("gh-autopr", "openai_key") {
         Ok(entry) => match entry.get_password() {
@@ -160,15 +167,19 @@ async fn run<B: Backend>(
     app.add_log("INFO", "Initializing...");
     app.update_progress(0.1);
     terminal.draw(|f| ui(f, app))?;
+    check_events(terminal, app, tick_rate, &mut last_tick)?;
 
     git_ensure_in_repo(app)?;
     terminal.draw(|f| ui(f, app))?;
+    check_events(terminal, app, tick_rate, &mut last_tick)?;
 
     git_cd_to_repo_root(app)?;
     terminal.draw(|f| ui(f, app))?;
+    check_events(terminal, app, tick_rate, &mut last_tick)?;
 
     let main_branch = git_main_branch(app).unwrap_or_else(|_| "main".to_string());
     terminal.draw(|f| ui(f, app))?;
+    check_events(terminal, app, tick_rate, &mut last_tick)?;
 
     let mut current_branch = git_current_branch(app)?;
     let is_current_branch_main = current_branch == main_branch;
@@ -181,9 +192,11 @@ async fn run<B: Backend>(
 
     git_ensure_not_detached_head(terminal, app, &current_branch)?;
     terminal.draw(|f| ui(f, app))?;
+    check_events(terminal, app, tick_rate, &mut last_tick)?;
 
     git_fetch_main(app, &current_branch, &main_branch)?;
     terminal.draw(|f| ui(f, app))?;
+    check_events(terminal, app, tick_rate, &mut last_tick)?;
 
     app.add_log(
         "INFO",
@@ -191,9 +204,11 @@ async fn run<B: Backend>(
     );
     app.update_progress(0.3);
     terminal.draw(|f| ui(f, app))?;
+    check_events(terminal, app, tick_rate, &mut last_tick)?;
 
     let diff_uncommitted = git_diff_uncommitted(app, &current_branch)?;
     terminal.draw(|f| ui(f, app))?;
+    check_events(terminal, app, tick_rate, &mut last_tick)?;
 
     if diff_uncommitted.is_empty() {
         if is_current_branch_main {
@@ -208,14 +223,17 @@ async fn run<B: Backend>(
     } else {
         app.update_details(diff_uncommitted.clone());
         terminal.draw(|f| ui(f, app))?;
+        check_events(terminal, app, tick_rate, &mut last_tick)?;
 
         app.add_log("INFO", "Fetching GitHub issues...");
         terminal.draw(|f| ui(f, app))?;
+        check_events(terminal, app, tick_rate, &mut last_tick)?;
 
         let issues_json = git_list_issues(app)?;
 
         app.add_log("INFO", "Generating branch name and commit description...");
         terminal.draw(|f| ui(f, app))?;
+        check_events(terminal, app, tick_rate, &mut last_tick)?;
 
         let (generated_branch_name, commit_title, commit_details) =
             gpt_generate_branch_name_and_commit_description(
@@ -228,6 +246,7 @@ async fn run<B: Backend>(
             )
             .await?;
         terminal.draw(|f| ui(f, app))?;
+        check_events(terminal, app, tick_rate, &mut last_tick)?;
 
         if is_current_branch_main || !update_pr {
             // Always create a new branch if a) on main or b) not asked to update an existing PR
@@ -240,8 +259,10 @@ async fn run<B: Backend>(
             terminal.draw(|f| ui(f, app))?;
         }
 
+        check_events(terminal, app, tick_rate, &mut last_tick)?;
         git_stage_and_commit(app, &commit_title, &commit_details)?;
         terminal.draw(|f| ui(f, app))?;
+        check_events(terminal, app, tick_rate, &mut last_tick)?;
     }
 
     let diff_between_branches =
@@ -257,6 +278,7 @@ async fn run<B: Backend>(
             }
         };
     terminal.draw(|f| ui(f, app))?;
+    check_events(terminal, app, tick_rate, &mut last_tick)?;
 
     if diff_between_branches.is_empty() {
         app.add_log("INFO", "No changes between the branches.");
@@ -269,9 +291,11 @@ async fn run<B: Backend>(
     app.add_log("INFO", "Generating PR details using AI...");
     app.update_progress(0.5);
     terminal.draw(|f| ui(f, app))?;
+    check_events(terminal, app, tick_rate, &mut last_tick)?;
 
     app.add_log("INFO", "Fetching GitHub issues...");
     terminal.draw(|f| ui(f, app))?;
+    check_events(terminal, app, tick_rate, &mut last_tick)?;
 
     let issues_json = git_list_issues(app)?;
 
@@ -284,6 +308,7 @@ async fn run<B: Backend>(
         bigger_picture,
     )
     .await?;
+    check_events(terminal, app, tick_rate, &mut last_tick)?;
     app.add_log("INFO", format!("Commit title: {commit_title}"));
     app.add_log(
         "INFO",
@@ -294,13 +319,17 @@ async fn run<B: Backend>(
     );
     terminal.draw(|f| ui(f, app))?;
 
+    check_events(terminal, app, tick_rate, &mut last_tick)?;
     git_push_branch(app, &current_branch)?;
     terminal.draw(|f| ui(f, app))?;
+    check_events(terminal, app, tick_rate, &mut last_tick)?;
 
     app.add_log("INFO", format!("Commit title: {commit_title}"));
     app.add_log("INFO", "Creating pull request...");
     app.update_progress(0.8);
     terminal.draw(|f| ui(f, app))?;
+    check_events(terminal, app, tick_rate, &mut last_tick)?;
+
     if update_pr {
         app.add_log("INFO", "Updating existing pull request...");
     } else {
@@ -322,6 +351,7 @@ async fn run<B: Backend>(
             app.add_error(format!("Failed to create/update pull request: {}", err));
             app.switch_to_tab(1);
             terminal.draw(|f| ui(f, app))?;
+            check_events(terminal, app, tick_rate, &mut last_tick)?;
             // Cancel the UI task to avoid concurrent draws in the error case.
             ui_update.abort();
             // Await user input so the user can see the error message before exiting.
@@ -330,19 +360,24 @@ async fn run<B: Backend>(
         }
     }
     terminal.draw(|f| ui(f, app))?;
+    check_events(terminal, app, tick_rate, &mut last_tick)?;
 
     app.add_log("SUCCESS", "Pull request created successfully.");
     app.update_progress(1.0);
     terminal.draw(|f| ui(f, app))?;
+    check_events(terminal, app, tick_rate, &mut last_tick)?;
 
     git_checkout_branch(app, &original_branch)?;
     terminal.draw(|f| ui(f, app))?;
+    check_events(terminal, app, tick_rate, &mut last_tick)?;
 
     git_pull_branch(app, &original_branch)?;
     terminal.draw(|f| ui(f, app))?;
+    check_events(terminal, app, tick_rate, &mut last_tick)?;
 
     git_stash_pop_autostash_if_exists(app)?;
     terminal.draw(|f| ui(f, app))?;
+    check_events(terminal, app, tick_rate, &mut last_tick)?;
 
     // Cancel the UI progress-update task
     ui_update.abort();
@@ -359,28 +394,43 @@ fn run_event_loop<B: Backend>(
     last_tick: &mut Instant,
 ) -> Result<(), Box<dyn std::error::Error>> {
     loop {
-        terminal.draw(|f| ui(f, app))?;
+        check_events(terminal, app, tick_rate, last_tick)?;
+    }
+}
 
-        let timeout = tick_rate.saturating_sub(last_tick.elapsed());
-        if event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Left => app.on_left(),
-                        KeyCode::Right => app.on_right(),
-                        KeyCode::Char('q') => app.should_quit = true,
-                        _ => {}
+fn check_events<B: Backend>(
+    terminal: &mut Terminal<B>,
+    app: &mut App<'_>,
+    tick_rate: Duration,
+    last_tick: &mut Instant,
+) -> Result<(), Box<dyn std::error::Error>> {
+    terminal.draw(|f| ui(f, app))?;
+
+    let timeout = tick_rate.saturating_sub(last_tick.elapsed());
+    if event::poll(timeout)? {
+        if let Event::Key(key) = event::read()? {
+            if key.kind == KeyEventKind::Press {
+                match key.code {
+                    KeyCode::Left => app.on_left(),
+                    KeyCode::Right => app.on_right(),
+                    KeyCode::Char('q') => app.should_quit = true,
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        eprintln!("Ctrl+C detected. Reverting repository to original state...");
+                        app.should_quit = true;
+                        return Err("Interrupted by user".into());
                     }
+                    _ => {}
                 }
             }
         }
-
-        if last_tick.elapsed() >= tick_rate {
-            *last_tick = Instant::now();
-        }
-
-        if app.should_quit {
-            return Ok(());
-        }
     }
+
+    if last_tick.elapsed() >= tick_rate {
+        *last_tick = Instant::now();
+    }
+
+    if app.should_quit {
+        return Ok(());
+    }
+    Ok(())
 }
