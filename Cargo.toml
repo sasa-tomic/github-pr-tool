@@ -3,6 +3,14 @@ name = "gh-autopr"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "gh_autopr"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gh-autopr"
+path = "src/main.rs"
+
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 openai = "1.0.0-alpha.18"
@@ -13,3 +21,10 @@ env_logger = "0.11"
 ratatui = "0.29.0"
 keyring = "3.6.1"
 once_cell = "1.21.3"
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3.8"
+mockall = "0.12"
+serde_json = "1.0"
+httpmock = "0.7"

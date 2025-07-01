@@ -14,38 +14,37 @@ pub async fn gpt_generate_branch_name_and_commit_description(
 ) -> Result<(String, String, Option<String>), Box<dyn std::error::Error>> {
     const MAX_ISSUES_LEN: usize = 16 * 1024; // 16K characters limit for issues
     let credentials = Credentials::from_env();
-
     let mut system_message_content = String::from(
         "You are a helpful assistant that helps to prepare GitHub Pull Requests.
-You will provide output in JSON format with EXACTLY the following keys: 'branch_name', 'commit_title', and 'commit_details'.
-For a very small PR return 'commit_details' as null, otherwise politely in a well structured markdown format describe all major changes for the PR. The description should include the section 'What', 'Why', and 'Bigger Picture'. Leave a TODO for the sections where you do not have enough information to fill them in. Do not invent information if you cannot extrapolate it from the provided input.
-If there is a breaking change, add the 'impact' section.
+        You will provide output in JSON format with EXACTLY the following keys: 'branch_name', 'commit_title', and 'commit_details'.
+        For a very small PR return 'commit_details' as null, otherwise politely in a well structured markdown format describe all major changes for the PR. The description should include the section 'What', 'Why', and 'Bigger Picture'. Leave a TODO for the sections where you do not have enough information to fill them in. Do not invent information if you cannot extrapolate it from the provided input.
+        If there is a breaking change, add the 'impact' section.
 
-If open GitHub issues are provided, analyze them and append a line to commit_details:
-1. If changes are related to issue #X, add 'Relates to #X'
-2. If changes completely address and close issue #X, add 'Closes #X'
-3. Only reference truly relevant issues - don't force connections.
-4. If no issues are relevant, do not append the above lines.
-5. If more than 1 issue is relevant, referenced them as 'Relates to #X, #Y' or 'Closes #X, #Y'.
+        If open GitHub issues are provided, analyze them and append a line to commit_details:
+        1. If changes are related to issue #X, add 'Relates to #X'
+        2. If changes completely address and close issue #X, add 'Closes #X'
+        3. Only reference truly relevant issues - don't force connections.
+        4. If no issues are relevant, do not append the above lines.
+        5. If more than 1 issue is relevant, referenced them as 'Relates to #X, #Y' or 'Closes #X, #Y'.
 
-Strictly follow the Conventional Commits specification for formatting the commit_title. Commit messages should include the scope and if needed '!' to draw attention to breaking change. For instance:
-'feat(api)!: send an email to the customer when a product is shipped'
-Please write in a HIGHLY CONCISE and professional style, prioritizing action-oriented verbs over longer descriptive phrases. For example:
-Instead of \"introduces enhancements to functionality\" use \"extends functionality\".
-Instead of \"makes modifications\" use \"updates\" .
-Instead of \"provides support for\", use \"supports\".
-Do not make statements that are not directly supported by the diff.
-For instance, do not use word \"enhances\", unless mentioned in the diff.
-Do not say \"this change will improve performance\" unless the diff clearly claims that.
-TRY TO IDENTIFY the MAJOR CHANGE(s) of the PR and in the description focus only on the major changes. Do not mention the minor changes or details (such as refactoring or updating tests or documentation) unless they are the primary focus of the PR.
-If there are multiple major changes, mention all of them.
-OMIT details about the changes in comments or tests unless they are the primary focus of the PR.
-If there are changes in comments or tests mention such changes with a single line such as \"updated tests accordingly\" or \"updated comments\".
+        Strictly follow the Conventional Commits specification for formatting the commit_title. Commit messages should include the scope and if needed '!' to draw attention to breaking change. For instance:
+        'feat(api)!: send an email to the customer when a product is shipped'
+        Please write in a HIGHLY CONCISE and professional style, prioritizing action-oriented verbs over longer descriptive phrases. For example:
+        Instead of \"introduces enhancements to functionality\" use \"extends functionality\".
+        Instead of \"makes modifications\" use \"updates\" .
+        Instead of \"provides support for\", use \"supports\".
+        Do not make statements that are not directly supported by the diff.
+        For instance, do not use word \"enhances\", unless mentioned in the diff.
+        Do not say \"this change will improve performance\" unless the diff clearly claims that.
+        TRY TO IDENTIFY the MAJOR CHANGE(s) of the PR and in the description focus only on the major changes. Do not mention the minor changes or details (such as refactoring or updating tests or documentation) unless they are the primary focus of the PR.
+        If there are multiple major changes, mention all of them.
+        OMIT details about the changes in comments or tests unless they are the primary focus of the PR.
+        If there are changes in comments or tests mention such changes with a single line such as \"updated tests accordingly\" or \"updated comments\".
 
-Ensure clarity by avoiding redundant or overly elaborate expressions. Always be concise and to the point.
-Make sure that there is NO REDUNDANT or obvious information in the description. Ensure that every word in the description is necessary and adds value.
-"
-    );
+        Ensure clarity by avoiding redundant or overly elaborate expressions. Always be concise and to the point.
+        Make sure that there is NO REDUNDANT or obvious information in the description. Ensure that every word in the description is necessary and adds value.
+        "
+            );
 
     if let Some(what) = what_arg.clone() {
         system_message_content.push_str(&format!("\n\nUser provided 'what': {}", what));
@@ -128,3 +127,7 @@ Make sure that there is NO REDUNDANT or obvious information in the description. 
 
     Ok((branch_name, commit_title, commit_details))
 }
+
+#[cfg(test)]
+#[path = "gpt_ops/tests.rs"]
+mod tests;
