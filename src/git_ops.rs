@@ -1159,6 +1159,16 @@ pub fn git_list_issues(app: &mut App) -> Result<String, Box<dyn Error>> {
 
 static ISSUES_CACHE: OnceCell<Mutex<Option<String>>> = OnceCell::new();
 
+/// Check if we're currently in a temporary worktree
+pub fn is_in_temp_worktree() -> bool {
+    if let Ok(current_dir) = std::env::current_dir() {
+        if let Some(dir_name) = current_dir.file_name().and_then(|n| n.to_str()) {
+            return dir_name.starts_with("autopr-wt-");
+        }
+    }
+    false
+}
+
 /// Clean up old patch files to prevent accumulation
 /// Removes patch files older than `days_old` days
 pub fn cleanup_old_patches(app: &mut App, days_old: u64) -> Result<(), Box<dyn Error>> {
