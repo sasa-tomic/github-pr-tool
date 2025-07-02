@@ -170,10 +170,37 @@ impl TempWorktree {
             for path in untracked_list.split('\0').filter(|p| !p.is_empty()) {
                 let from = orig_root.join(path);
                 let to = path; // relative inside temp WT
-                if let Some(parent) = Path::new(to).parent() {
-                    fs_err::create_dir_all(parent)?;
+
+                // Check if source file exists before trying to copy
+                // (files might have been renamed/moved and no longer exist at original path)
+                if !from.exists() {
+                    eprintln!(
+                        "Warning: Skipping untracked file copy - source doesn't exist: {}",
+                        from.display()
+                    );
+                    continue;
                 }
-                fs_err::copy(&from, to)?;
+
+                if let Some(parent) = Path::new(to).parent() {
+                    if let Err(e) = fs_err::create_dir_all(parent) {
+                        eprintln!(
+                            "Warning: Failed to create directory {}: {}",
+                            parent.display(),
+                            e
+                        );
+                        continue;
+                    }
+                }
+
+                if let Err(e) = fs_err::copy(&from, to) {
+                    eprintln!(
+                        "Warning: Failed to copy untracked file from {} to {}: {}",
+                        from.display(),
+                        to,
+                        e
+                    );
+                    continue;
+                }
             }
         }
 
@@ -617,6 +644,9 @@ pub fn git_fetch_main(
     current_branch: &String,
     main_branch: &String,
 ) -> Result<(), Box<dyn Error>> {
+    // Clean up patch files older than 30 days to prevent accumulation
+    let _ = cleanup_old_patches(app, 30);
+
     if current_branch == main_branch {
         let had_staged_changes = git_has_staged_changes()?;
         if had_staged_changes {
@@ -633,6 +663,49 @@ pub fn git_fetch_main(
             // Create patch for unstaged changes
             let unstaged_patch = Command::new("git").args(["diff", "--binary"]).output()?;
 
+            // Create directory for patches in .git/
+            let git_dir = PathBuf::from(
+                String::from_utf8(
+                    Command::new("git")
+                        .args(["rev-parse", "--git-dir"])
+                        .output()?
+                        .stdout,
+                )?
+                .trim(),
+            );
+            let patches_dir = git_dir.join("gh-autopr-patches");
+            fs_err::create_dir_all(&patches_dir)?;
+
+            // Generate timestamp for unique patch filenames
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_secs();
+
+            let mut staged_patch_file = None;
+            let mut unstaged_patch_file = None;
+
+            // Save staged patch to file
+            if !staged_patch.stdout.is_empty() {
+                let patch_file = patches_dir.join(format!("staged-{}.patch", timestamp));
+                fs_err::write(&patch_file, &staged_patch.stdout)?;
+                staged_patch_file = Some(patch_file.clone());
+                app.add_log(
+                    "INFO",
+                    format!("Saved staged changes patch to: {}", patch_file.display()),
+                );
+            }
+
+            // Save unstaged patch to file
+            if !unstaged_patch.stdout.is_empty() {
+                let patch_file = patches_dir.join(format!("unstaged-{}.patch", timestamp));
+                fs_err::write(&patch_file, &unstaged_patch.stdout)?;
+                unstaged_patch_file = Some(patch_file.clone());
+                app.add_log(
+                    "INFO",
+                    format!("Saved unstaged changes patch to: {}", patch_file.display()),
+                );
+            }
+
             // Reset all changes to clean working tree for pull
             Command::new("git")
                 .args(["reset", "--hard", "HEAD"])
@@ -647,35 +720,55 @@ pub fn git_fetch_main(
             app.add_log("INFO", "Pulled latest changes from origin");
 
             // Reapply staged changes
-            if !staged_patch.stdout.is_empty() {
-                let mut child = Command::new("git")
-                    .args(["apply", "--cached", "-"])
-                    .stdin(std::process::Stdio::piped())
-                    .spawn()?;
-                child
-                    .stdin
-                    .as_mut()
-                    .unwrap()
-                    .write_all(&staged_patch.stdout)?;
-                if !child.wait()?.success() {
-                    app.add_log("WARN", "Failed to reapply staged changes after pull");
+            if let Some(ref patch_file) = staged_patch_file {
+                let output = Command::new("git")
+                    .args(["apply", "--cached", patch_file.to_str().unwrap()])
+                    .output()?;
+                if !output.status.success() {
+                    app.add_log(
+                        "WARN",
+                        "Failed to reapply staged changes after pull - some changes may be lost",
+                    );
+                    app.add_log(
+                        "INFO",
+                        format!("Staged patch available at: {}", patch_file.display()),
+                    );
+                    app.add_log("INFO", "To manually apply: git apply --cached <patch-file>");
+                } else {
+                    app.add_log("INFO", "Successfully reapplied staged changes");
                 }
             }
 
             // Reapply unstaged changes
-            if !unstaged_patch.stdout.is_empty() {
-                let mut child = Command::new("git")
-                    .args(["apply", "-"])
-                    .stdin(std::process::Stdio::piped())
-                    .spawn()?;
-                child
-                    .stdin
-                    .as_mut()
-                    .unwrap()
-                    .write_all(&unstaged_patch.stdout)?;
-                if !child.wait()?.success() {
-                    app.add_log("WARN", "Failed to reapply unstaged changes after pull");
+            if let Some(ref patch_file) = unstaged_patch_file {
+                let output = Command::new("git")
+                    .args(["apply", patch_file.to_str().unwrap()])
+                    .output()?;
+                if !output.status.success() {
+                    app.add_log(
+                        "WARN",
+                        "Failed to reapply unstaged changes after pull - some changes may be lost",
+                    );
+                    app.add_log(
+                        "INFO",
+                        format!("Unstaged patch available at: {}", patch_file.display()),
+                    );
+                    app.add_log("INFO", "To manually apply: git apply <patch-file>");
+                } else {
+                    app.add_log("INFO", "Successfully reapplied unstaged changes");
                 }
+            }
+
+            // Provide user guidance on patch files
+            if staged_patch_file.is_some() || unstaged_patch_file.is_some() {
+                app.add_log(
+                    "INFO",
+                    format!("Patch files stored in: {}", patches_dir.display()),
+                );
+                app.add_log(
+                    "INFO",
+                    "You can inspect these patches or apply them manually if needed",
+                );
             }
 
             return Ok(()); // Early return since we already handled the pull
@@ -1065,6 +1158,71 @@ pub fn git_list_issues(app: &mut App) -> Result<String, Box<dyn Error>> {
 }
 
 static ISSUES_CACHE: OnceCell<Mutex<Option<String>>> = OnceCell::new();
+
+/// Clean up old patch files to prevent accumulation
+/// Removes patch files older than `days_old` days
+pub fn cleanup_old_patches(app: &mut App, days_old: u64) -> Result<(), Box<dyn Error>> {
+    let git_dir = PathBuf::from(
+        String::from_utf8(
+            Command::new("git")
+                .args(["rev-parse", "--git-dir"])
+                .output()?
+                .stdout,
+        )?
+        .trim(),
+    );
+    let patches_dir = git_dir.join("gh-autopr-patches");
+
+    if !patches_dir.exists() {
+        return Ok(());
+    }
+
+    let cutoff_time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs()
+        - (days_old * 24 * 60 * 60);
+
+    let mut cleaned_count = 0;
+    for entry in fs_err::read_dir(&patches_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_file() && path.extension().is_some_and(|ext| ext == "patch") {
+            if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+                // Extract timestamp from filename (format: staged-TIMESTAMP.patch or unstaged-TIMESTAMP.patch)
+                if let Some(timestamp_str) =
+                    filename.split('-').nth(1).and_then(|s| s.split('.').next())
+                {
+                    if let Ok(timestamp) = timestamp_str.parse::<u64>() {
+                        if timestamp < cutoff_time {
+                            if let Err(e) = fs_err::remove_file(&path) {
+                                app.add_log(
+                                    "WARN",
+                                    format!(
+                                        "Failed to remove old patch file {}: {}",
+                                        path.display(),
+                                        e
+                                    ),
+                                );
+                            } else {
+                                cleaned_count += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if cleaned_count > 0 {
+        app.add_log(
+            "INFO",
+            format!("Cleaned up {} old patch files", cleaned_count),
+        );
+    }
+
+    Ok(())
+}
 
 #[cfg(test)]
 #[path = "git_ops/tests.rs"]
