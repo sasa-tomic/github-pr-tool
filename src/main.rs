@@ -1,7 +1,11 @@
 mod git_ops;
+mod git_temp_worktree;
+mod github_ops;
 mod gpt_ops;
 mod tui;
 use crate::git_ops::*;
+use crate::git_temp_worktree::*;
+use crate::github_ops::*;
 use crate::gpt_ops::*;
 use crate::tui::*;
 use clap::Parser;
@@ -67,6 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut app = App::new("GitHub PR Auto-Submit");
     let tick_rate = Duration::from_millis(250);
+
     let app_result = run(
         &mut terminal,
         &mut app,
@@ -95,6 +100,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (log_level, log_message) in &app.logs {
         println!("{}: {}", log_level, log_message);
     }
+
+    // Clean up patch files older than 30 days to prevent accumulation
+    let _ = cleanup_old_patches(&mut app, 30);
 
     Ok(())
 }
@@ -229,7 +237,7 @@ async fn run<B: Backend>(
         terminal.draw(|f| ui(f, app))?;
         check_events(terminal, app, tick_rate, &mut last_tick)?;
 
-        let issues_json = git_list_issues(app)?;
+        let issues_json = github_list_issues(app)?;
 
         app.add_log("INFO", "Generating branch name and commit description...");
         terminal.draw(|f| ui(f, app))?;
@@ -297,7 +305,7 @@ async fn run<B: Backend>(
     terminal.draw(|f| ui(f, app))?;
     check_events(terminal, app, tick_rate, &mut last_tick)?;
 
-    let issues_json = git_list_issues(app)?;
+    let issues_json = github_list_issues(app)?;
 
     let (_, commit_title, commit_details) = gpt_generate_branch_name_and_commit_description(
         app,
@@ -381,7 +389,10 @@ async fn run<B: Backend>(
         terminal.draw(|f| ui(f, app))?;
         check_events(terminal, app, tick_rate, &mut last_tick)?;
     } else {
-        app.add_log("INFO", "Skipping manual cleanup - temp worktree will handle it automatically");
+        app.add_log(
+            "INFO",
+            "Skipping manual cleanup - temp worktree will handle it automatically",
+        );
         terminal.draw(|f| ui(f, app))?;
         check_events(terminal, app, tick_rate, &mut last_tick)?;
     }
