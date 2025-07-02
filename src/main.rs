@@ -367,17 +367,24 @@ async fn run<B: Backend>(
     terminal.draw(|f| ui(f, app))?;
     check_events(terminal, app, tick_rate, &mut last_tick)?;
 
-    git_checkout_branch(app, &original_branch)?;
-    terminal.draw(|f| ui(f, app))?;
-    check_events(terminal, app, tick_rate, &mut last_tick)?;
+    // Skip manual cleanup when in temp worktree - TempWorktree::Drop handles it automatically
+    if !is_in_temp_worktree() {
+        git_checkout_branch(app, &original_branch)?;
+        terminal.draw(|f| ui(f, app))?;
+        check_events(terminal, app, tick_rate, &mut last_tick)?;
 
-    git_pull_branch(app, &original_branch)?;
-    terminal.draw(|f| ui(f, app))?;
-    check_events(terminal, app, tick_rate, &mut last_tick)?;
+        git_pull_branch(app, &original_branch)?;
+        terminal.draw(|f| ui(f, app))?;
+        check_events(terminal, app, tick_rate, &mut last_tick)?;
 
-    git_stash_pop_autostash_if_exists(app)?;
-    terminal.draw(|f| ui(f, app))?;
-    check_events(terminal, app, tick_rate, &mut last_tick)?;
+        git_stash_pop_autostash_if_exists(app)?;
+        terminal.draw(|f| ui(f, app))?;
+        check_events(terminal, app, tick_rate, &mut last_tick)?;
+    } else {
+        app.add_log("INFO", "Skipping manual cleanup - temp worktree will handle it automatically");
+        terminal.draw(|f| ui(f, app))?;
+        check_events(terminal, app, tick_rate, &mut last_tick)?;
+    }
 
     // Cancel the UI progress-update task
     ui_update.abort();
