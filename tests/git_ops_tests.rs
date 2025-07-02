@@ -6,6 +6,7 @@ use tempfile::TempDir;
 
 // Import from the local crate
 use gh_autopr::git_ops::*;
+use gh_autopr::github_ops::*;
 use gh_autopr::tui::App;
 
 // Helper function to create a temporary git repository for testing
@@ -172,7 +173,7 @@ fn test_git_main_branch() {
         }
         Err(_) => {
             // Expected in some environments or git configurations
-            assert!(app.errors.len() > 0);
+            assert!(!app.errors.is_empty());
         }
     }
 }
@@ -261,7 +262,7 @@ fn test_git_checkout_new_branch() {
         }
         Err(_) => {
             // Expected in some CI environments
-            assert!(app.errors.len() > 0);
+            assert!(!app.errors.is_empty());
         }
     }
 }
@@ -359,11 +360,11 @@ mod integration_tests {
 
     #[test]
     #[ignore = "requires gh CLI tool"]
-    fn test_git_list_issues_integration() {
+    fn test_github_list_issues_integration() {
         // This test would require a real GitHub repository with issues
         // Skipped in normal test runs
         let mut app = App::new("Test App");
-        let result = git_list_issues(&mut app);
+        let result = github_list_issues(&mut app);
 
         match result {
             Ok(issues_json) => {
@@ -373,7 +374,7 @@ mod integration_tests {
             }
             Err(_) => {
                 // Expected if not in a GitHub repository or no gh CLI
-                assert!(app.errors.len() > 0);
+                assert!(!app.errors.is_empty());
             }
         }
     }
@@ -401,7 +402,7 @@ mod integration_tests {
                 assert!(app.logs.iter().any(|(level, _)| *level == "SUCCESS"));
             }
             Err(_) => {
-                assert!(app.errors.len() > 0);
+                assert!(!app.errors.is_empty());
             }
         }
     }
