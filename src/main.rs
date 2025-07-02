@@ -402,6 +402,9 @@ fn run_event_loop<B: Backend>(
 ) -> Result<(), Box<dyn std::error::Error>> {
     loop {
         check_events(terminal, app, tick_rate, last_tick)?;
+        if app.should_quit {
+            return Ok(());
+        }
     }
 }
 
