@@ -620,55 +620,73 @@ pub fn git_fetch_main(
     if current_branch == main_branch {
         let had_staged_changes = git_has_staged_changes()?;
         if had_staged_changes {
-            app.add_log("INFO", "Staged changes detected, stashing in temp branch");
-            git_checkout_new_branch(app, AUTOCOMMIT_BRANCH_NAME, current_branch, true)?;
-            git_commit_staged_changes(app, "Temporary commit for stashing changes", &None)?;
-            // Stash all other changes
-            Command::new("git")
-                .args(["stash", "push", "-m", AUTOSTASH_NAME, "--include-untracked"])
+            app.add_log(
+                "INFO",
+                "Staged changes detected, creating patches to preserve them",
+            );
+
+            // Create patch for staged changes
+            let staged_patch = Command::new("git")
+                .args(["diff", "--staged", "--binary"])
                 .output()?;
-            // Return to main branch
-            git_checkout_branch(app, main_branch)?;
+
+            // Create patch for unstaged changes
+            let unstaged_patch = Command::new("git").args(["diff", "--binary"]).output()?;
+
+            // Reset all changes to clean working tree for pull
+            Command::new("git")
+                .args(["reset", "--hard", "HEAD"])
+                .output()?;
+
+            // Pull latest changes
+            let output = Command::new("git").args(["pull", "origin"]).output()?;
+            if !output.status.success() {
+                app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
+                return Err("Failed to pull from origin".into());
+            }
+            app.add_log("INFO", "Pulled latest changes from origin");
+
+            // Reapply staged changes
+            if !staged_patch.stdout.is_empty() {
+                let mut child = Command::new("git")
+                    .args(["apply", "--cached", "-"])
+                    .stdin(std::process::Stdio::piped())
+                    .spawn()?;
+                child
+                    .stdin
+                    .as_mut()
+                    .unwrap()
+                    .write_all(&staged_patch.stdout)?;
+                if !child.wait()?.success() {
+                    app.add_log("WARN", "Failed to reapply staged changes after pull");
+                }
+            }
+
+            // Reapply unstaged changes
+            if !unstaged_patch.stdout.is_empty() {
+                let mut child = Command::new("git")
+                    .args(["apply", "-"])
+                    .stdin(std::process::Stdio::piped())
+                    .spawn()?;
+                child
+                    .stdin
+                    .as_mut()
+                    .unwrap()
+                    .write_all(&unstaged_patch.stdout)?;
+                if !child.wait()?.success() {
+                    app.add_log("WARN", "Failed to reapply unstaged changes after pull");
+                }
+            }
+
+            return Ok(()); // Early return since we already handled the pull
         }
+        // Only reach here if no staged changes were detected
         let output = Command::new("git").args(["pull", "origin"]).output()?;
         if !output.status.success() {
             app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
             return Err("Failed to pull from origin".into());
         }
         app.add_log("INFO", "Pulled latest changes from origin");
-        if had_staged_changes {
-            // Add changes from AUTOCOMMIT_BRANCH_NAME to the index (staged): git cherry-pick AUTOCOMMIT_BRANCH_NAME~0
-            let output = Command::new("git")
-                .args(["cherry-pick", &format!("{}~0", AUTOCOMMIT_BRANCH_NAME)])
-                .output()?;
-            if !output.status.success() {
-                app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
-                return Err(format!(
-                    "Failed to cherry-pick staged changes to the latest {}",
-                    main_branch
-                )
-                .into());
-            }
-            app.add_log(
-                "INFO",
-                "Cherry-picked staged changes to the latest main branch",
-            );
-            // Reset the last commit: git reset --soft HEAD~1
-            let output = Command::new("git")
-                .args(["reset", "--soft", "HEAD~1"])
-                .output()?;
-            if !output.status.success() {
-                app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
-                return Err("Failed to reset the last commit".into());
-            }
-            app.add_log("INFO", "Reset the last commit");
-            // Stage all changes: git add .
-            let output = Command::new("git").args(["add", "."]).output()?;
-            if !output.status.success() {
-                app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
-                return Err("Failed to stage all changes".into());
-            }
-        }
     } else {
         let output = Command::new("git")
             .args([
