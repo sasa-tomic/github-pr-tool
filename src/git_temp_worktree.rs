@@ -1,3 +1,4 @@
+use crate::git_ops::get_unstaged_patch_if_exists;
 use crate::App;
 use std::error::Error;
 use std::io::Write;
@@ -37,10 +38,9 @@ impl TempWorktree {
             .args(["diff", "--staged", "--binary"])
             .output()?
             .stdout;
-        let unstaged_patch = Command::new("git")
-            .args(["diff", "--binary"])
-            .output()?
-            .stdout;
+
+        // Get unstaged patch only if there are actual unstaged changes
+        let unstaged_patch = get_unstaged_patch_if_exists()?;
         let untracked_list = String::from_utf8(
             Command::new("git")
                 .args(["ls-files", "--others", "--exclude-standard", "-z"])
@@ -306,3 +306,7 @@ pub fn cleanup_old_patches(app: &mut App, days_old: u64) -> Result<(), Box<dyn E
 
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "git_temp_worktree/tests.rs"]
+mod tests;
