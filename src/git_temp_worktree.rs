@@ -37,10 +37,23 @@ impl TempWorktree {
             .args(["diff", "--staged", "--binary"])
             .output()?
             .stdout;
-        let unstaged_patch = Command::new("git")
-            .args(["diff", "--binary"])
-            .output()?
-            .stdout;
+
+        // Only capture unstaged patch if there are actual unstaged changes
+        // Otherwise, when working tree is clean, `git diff --binary` shows the inverse
+        // of staged changes, which would incorrectly undo them when applied
+        let has_unstaged_changes = !Command::new("git")
+            .args(["diff", "--quiet"])
+            .status()?
+            .success();
+
+        let unstaged_patch = if has_unstaged_changes {
+            Command::new("git")
+                .args(["diff", "--binary"])
+                .output()?
+                .stdout
+        } else {
+            Vec::new()
+        };
         let untracked_list = String::from_utf8(
             Command::new("git")
                 .args(["ls-files", "--others", "--exclude-standard", "-z"])
@@ -306,3 +319,7 @@ pub fn cleanup_old_patches(app: &mut App, days_old: u64) -> Result<(), Box<dyn E
 
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "git_temp_worktree/tests.rs"]
+mod tests;

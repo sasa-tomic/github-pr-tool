@@ -537,8 +537,24 @@ pub fn git_fetch_main(
                 .args(["diff", "--staged", "--binary"])
                 .output()?;
 
-            // Create patch for unstaged changes
-            let unstaged_patch = Command::new("git").args(["diff", "--binary"]).output()?;
+            // Only capture unstaged patch if there are actual unstaged changes
+            // Otherwise, when working tree is clean, `git diff --binary` shows the inverse
+            // of staged changes, which would incorrectly undo them when applied
+            let has_unstaged_changes = !Command::new("git")
+                .args(["diff", "--quiet"])
+                .status()?
+                .success();
+
+            let unstaged_patch = if has_unstaged_changes {
+                Command::new("git").args(["diff", "--binary"]).output()?
+            } else {
+                // Create empty patch output when there are no unstaged changes
+                std::process::Output {
+                    status: std::process::Command::new("true").status()?,
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                }
+            };
 
             // Create directory for patches in .git/
             let git_dir = PathBuf::from(
