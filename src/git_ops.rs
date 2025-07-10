@@ -537,24 +537,8 @@ pub fn git_fetch_main(
                 .args(["diff", "--staged", "--binary"])
                 .output()?;
 
-            // Only capture unstaged patch if there are actual unstaged changes
-            // Otherwise, when working tree is clean, `git diff --binary` shows the inverse
-            // of staged changes, which would incorrectly undo them when applied
-            let has_unstaged_changes = !Command::new("git")
-                .args(["diff", "--quiet"])
-                .status()?
-                .success();
-
-            let unstaged_patch = if has_unstaged_changes {
-                Command::new("git").args(["diff", "--binary"]).output()?
-            } else {
-                // Create empty patch output when there are no unstaged changes
-                std::process::Output {
-                    status: std::process::Command::new("true").status()?,
-                    stdout: Vec::new(),
-                    stderr: Vec::new(),
-                }
-            };
+            // Get unstaged patch only if there are actual unstaged changes
+            let unstaged_patch = get_unstaged_patch_if_exists()?;
 
             // Create directory for patches in .git/
             let git_dir = PathBuf::from(
@@ -589,9 +573,9 @@ pub fn git_fetch_main(
             }
 
             // Save unstaged patch to file
-            if !unstaged_patch.stdout.is_empty() {
+            if !unstaged_patch.is_empty() {
                 let patch_file = patches_dir.join(format!("unstaged-{}.patch", timestamp));
-                fs_err::write(&patch_file, &unstaged_patch.stdout)?;
+                fs_err::write(&patch_file, &unstaged_patch)?;
                 unstaged_patch_file = Some(patch_file.clone());
                 app.add_log(
                     "INFO",
@@ -757,6 +741,24 @@ pub fn git_has_staged_changes() -> Result<bool, Box<dyn Error>> {
         .output()?;
 
     Ok(!output.status.success())
+}
+
+/// Get unstaged changes as a binary patch, but only if there are actual unstaged changes.
+/// Returns empty Vec if there are no unstaged changes to avoid capturing inverse of staged changes.
+pub fn get_unstaged_patch_if_exists() -> Result<Vec<u8>, Box<dyn Error>> {
+    let has_unstaged_changes = !Command::new("git")
+        .args(["diff", "--quiet"])
+        .status()?
+        .success();
+
+    if has_unstaged_changes {
+        Ok(Command::new("git")
+            .args(["diff", "--binary"])
+            .output()?
+            .stdout)
+    } else {
+        Ok(Vec::new())
+    }
 }
 
 pub fn git_stash_pop_autostash_if_exists(app: &mut App) -> Result<(), Box<dyn Error>> {

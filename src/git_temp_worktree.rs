@@ -1,3 +1,4 @@
+use crate::git_ops::get_unstaged_patch_if_exists;
 use crate::App;
 use std::error::Error;
 use std::io::Write;
@@ -38,22 +39,8 @@ impl TempWorktree {
             .output()?
             .stdout;
 
-        // Only capture unstaged patch if there are actual unstaged changes
-        // Otherwise, when working tree is clean, `git diff --binary` shows the inverse
-        // of staged changes, which would incorrectly undo them when applied
-        let has_unstaged_changes = !Command::new("git")
-            .args(["diff", "--quiet"])
-            .status()?
-            .success();
-
-        let unstaged_patch = if has_unstaged_changes {
-            Command::new("git")
-                .args(["diff", "--binary"])
-                .output()?
-                .stdout
-        } else {
-            Vec::new()
-        };
+        // Get unstaged patch only if there are actual unstaged changes
+        let unstaged_patch = get_unstaged_patch_if_exists()?;
         let untracked_list = String::from_utf8(
             Command::new("git")
                 .args(["ls-files", "--others", "--exclude-standard", "-z"])

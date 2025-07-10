@@ -61,7 +61,7 @@ fn test_patch_filename_validation() {
                 .split('-')
                 .nth(1)
                 .and_then(|s| s.split('.').next())
-                .map_or(false, |timestamp| !timestamp.is_empty())
+                .is_some_and(|timestamp| !timestamp.is_empty())
     };
 
     assert!(is_valid_patch(valid_staged));
