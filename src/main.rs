@@ -58,10 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse command line arguments
     let args = Args::parse();
 
-    // All subsequent Git commands act inside the isolated worktree, that is automatically cleaned up.
-    let _tw = TempWorktree::enter()?;
-
-    // Initialize the terminal AFTER setting up signal handling
+    // Initialize the terminal FIRST for better error handling
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -79,6 +76,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         why: args.why,
         bigger_picture: args.bigger_picture,
     };
+
+    // Do git operations that need original worktree BEFORE entering temp worktree
+    let pre_worktree_result = pre_worktree_setup(&mut terminal, &mut app, tick_rate).await;
+
+    // Handle any pre-worktree errors
+    if let Err(e) = pre_worktree_result {
+        // restore terminal
+        disable_raw_mode()?;
+        execute!(
+            terminal.backend_mut(),
+            LeaveAlternateScreen,
+            DisableMouseCapture
+        )?;
+        terminal.show_cursor()?;
+        eprintln!("ERROR in pre-worktree setup: {}", e);
+        return Err(e);
+    }
+
+    // All subsequent Git commands act inside the isolated worktree, that is automatically cleaned up.
+    let _tw = TempWorktree::enter()?;
 
     let app_result = run(&mut terminal, &mut app, tick_rate, config).await;
 
@@ -112,6 +129,52 @@ struct RunConfig {
     what: Option<String>,
     why: Option<String>,
     bigger_picture: Option<String>,
+}
+
+async fn pre_worktree_setup<B: Backend>(
+    terminal: &mut Terminal<B>,
+    app: &mut App<'_>,
+    tick_rate: Duration,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut last_tick = Instant::now();
+
+    // Check that we're in a git repo
+    app.add_log("INFO", "Checking git repository...");
+    terminal.draw(|f| ui(f, app))?;
+    check_events(terminal, app, tick_rate, &mut last_tick)?;
+    git_ensure_in_repo(app)?;
+
+    // Navigate to repo root
+    app.add_log("INFO", "Navigating to repository root...");
+    terminal.draw(|f| ui(f, app))?;
+    check_events(terminal, app, tick_rate, &mut last_tick)?;
+    git_cd_to_repo_root(app)?;
+
+    // Get branch information
+    let main_branch = git_main_branch(app).unwrap_or_else(|_| "main".to_string());
+    terminal.draw(|f| ui(f, app))?;
+    check_events(terminal, app, tick_rate, &mut last_tick)?;
+
+    let current_branch = git_current_branch(app)?;
+    terminal.draw(|f| ui(f, app))?;
+    check_events(terminal, app, tick_rate, &mut last_tick)?;
+
+    // Ensure we're not in detached HEAD
+    git_ensure_not_detached_head(terminal, app, &current_branch)?;
+    terminal.draw(|f| ui(f, app))?;
+    check_events(terminal, app, tick_rate, &mut last_tick)?;
+
+    // Fetch main branch - THIS MUST HAPPEN BEFORE ENTERING TEMP WORKTREE
+    app.add_log("INFO", "Fetching latest changes...");
+    terminal.draw(|f| ui(f, app))?;
+    check_events(terminal, app, tick_rate, &mut last_tick)?;
+    git_fetch_main(app, &current_branch, &main_branch)?;
+
+    app.add_log("INFO", "Pre-worktree setup completed successfully");
+    terminal.draw(|f| ui(f, app))?;
+    check_events(terminal, app, tick_rate, &mut last_tick)?;
+
+    Ok(())
 }
 
 async fn run<B: Backend>(
@@ -175,19 +238,12 @@ async fn run<B: Backend>(
     std::env::set_var("OPENAI_KEY", api_key);
 
     // Initialize OpenAI and GitHub logic
-    app.add_log("INFO", "Initializing...");
+    app.add_log("INFO", "Initializing in temp worktree...");
     app.update_progress(0.1);
     terminal.draw(|f| ui(f, app))?;
     check_events(terminal, app, tick_rate, &mut last_tick)?;
 
-    git_ensure_in_repo(app)?;
-    terminal.draw(|f| ui(f, app))?;
-    check_events(terminal, app, tick_rate, &mut last_tick)?;
-
-    git_cd_to_repo_root(app)?;
-    terminal.draw(|f| ui(f, app))?;
-    check_events(terminal, app, tick_rate, &mut last_tick)?;
-
+    // Re-detect branch information in temp worktree context
     let main_branch = git_main_branch(app).unwrap_or_else(|_| "main".to_string());
     terminal.draw(|f| ui(f, app))?;
     check_events(terminal, app, tick_rate, &mut last_tick)?;
@@ -200,14 +256,6 @@ async fn run<B: Backend>(
 
     let original_branch = current_branch.clone();
     terminal.draw(|f| ui(f, app))?;
-
-    git_ensure_not_detached_head(terminal, app, &current_branch)?;
-    terminal.draw(|f| ui(f, app))?;
-    check_events(terminal, app, tick_rate, &mut last_tick)?;
-
-    git_fetch_main(app, &current_branch, &main_branch)?;
-    terminal.draw(|f| ui(f, app))?;
-    check_events(terminal, app, tick_rate, &mut last_tick)?;
 
     app.add_log(
         "INFO",
