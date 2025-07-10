@@ -36,12 +36,15 @@ fn test_discover_parent_branch_main() {
     assert_eq!(result.unwrap(), "main");
 }
 
+// Type alias to fix clippy::type_complexity warning
+#[allow(dead_code)]
+type GitRunDiffFn = fn(&mut App, bool, &str, &[&str]) -> Result<Option<String>, Box<dyn Error>>;
+
 #[test]
 fn test_git_run_diff_empty() {
     // This test would require a git repository, so we'll just test that the function exists
     // and has the right signature
     fn _test_signature() {
-        let _: fn(&mut App, bool, &str, &[&str]) -> Result<Option<String>, Box<dyn Error>> =
-            git_run_diff;
+        let _: GitRunDiffFn = git_run_diff;
     }
 }

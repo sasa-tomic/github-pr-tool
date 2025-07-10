@@ -431,7 +431,7 @@ fn apply_patch_with_directory_creation(
         // If 3-way merge fails, try creating directories first
         app.add_log(
             "INFO",
-            &format!(
+            format!(
                 "3-way merge failed for {} changes, trying to create directories first",
                 change_type
             ),
@@ -461,10 +461,10 @@ fn apply_patch_with_directory_creation(
             if let Err(e) = fs_err::create_dir_all(&dir) {
                 app.add_log(
                     "WARN",
-                    &format!("Failed to create directory {}: {}", dir.display(), e),
+                    format!("Failed to create directory {}: {}", dir.display(), e),
                 );
             } else {
-                app.add_log("INFO", &format!("Created directory: {}", dir.display()));
+                app.add_log("INFO", format!("Created directory: {}", dir.display()));
             }
         }
 
@@ -474,14 +474,14 @@ fn apply_patch_with_directory_creation(
         if !retry_output.status.success() {
             app.add_log(
                 "WARN",
-                &format!(
+                format!(
                     "Failed to reapply {} changes after pull - some changes may be lost",
                     change_type
                 ),
             );
             app.add_log(
                 "INFO",
-                &format!(
+                format!(
                     "{} patch available at: {}",
                     change_type,
                     patch_file.display()
@@ -492,10 +492,10 @@ fn apply_patch_with_directory_creation(
             } else {
                 "git apply --3way <patch-file>"
             };
-            app.add_log("INFO", &format!("To manually apply: {}", manual_cmd));
+            app.add_log("INFO", format!("To manually apply: {}", manual_cmd));
             app.add_log(
                 "ERROR",
-                &format!(
+                format!(
                     "Git apply error: {}",
                     String::from_utf8_lossy(&retry_output.stderr)
                 ),
@@ -503,7 +503,7 @@ fn apply_patch_with_directory_creation(
         } else {
             app.add_log(
                 "INFO",
-                &format!(
+                format!(
                     "Successfully reapplied {} changes after creating directories",
                     change_type
                 ),
@@ -512,7 +512,7 @@ fn apply_patch_with_directory_creation(
     } else {
         app.add_log(
             "INFO",
-            &format!("Successfully reapplied {} changes", change_type),
+            format!("Successfully reapplied {} changes", change_type),
         );
     }
 

@@ -72,17 +72,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = App::new("GitHub PR Auto-Submit");
     let tick_rate = Duration::from_millis(250);
 
-    let app_result = run(
-        &mut terminal,
-        &mut app,
-        tick_rate,
-        args.update_pr,
-        args.ready,
-        args.what,
-        args.why,
-        args.bigger_picture,
-    )
-    .await;
+    let config = RunConfig {
+        update_pr: args.update_pr,
+        ready: args.ready,
+        what: args.what,
+        why: args.why,
+        bigger_picture: args.bigger_picture,
+    };
+
+    let app_result = run(&mut terminal, &mut app, tick_rate, config).await;
 
     // restore terminal
     disable_raw_mode()?;
@@ -107,15 +105,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn run<B: Backend>(
-    terminal: &mut Terminal<B>,
-    app: &mut App<'_>,
-    tick_rate: Duration,
+#[derive(Debug, Clone)]
+struct RunConfig {
     update_pr: bool,
     ready: bool,
     what: Option<String>,
     why: Option<String>,
     bigger_picture: Option<String>,
+}
+
+async fn run<B: Backend>(
+    terminal: &mut Terminal<B>,
+    app: &mut App<'_>,
+    tick_rate: Duration,
+    config: RunConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut last_tick = Instant::now();
 
@@ -248,15 +251,15 @@ async fn run<B: Backend>(
                 app,
                 diff_uncommitted,
                 Some(issues_json),
-                what.clone(),
-                why.clone(),
-                bigger_picture.clone(),
+                config.what.clone(),
+                config.why.clone(),
+                config.bigger_picture.clone(),
             )
             .await?;
         terminal.draw(|f| ui(f, app))?;
         check_events(terminal, app, tick_rate, &mut last_tick)?;
 
-        if is_current_branch_main || !update_pr {
+        if is_current_branch_main || !config.update_pr {
             // Always create a new branch if a) on main or b) not asked to update an existing PR
             git_checkout_new_branch(app, &generated_branch_name, &current_branch, false)?;
             app.add_log(
@@ -311,9 +314,9 @@ async fn run<B: Backend>(
         app,
         diff_between_branches,
         Some(issues_json),
-        what,
-        why,
-        bigger_picture,
+        config.what,
+        config.why,
+        config.bigger_picture,
     )
     .await?;
     check_events(terminal, app, tick_rate, &mut last_tick)?;
@@ -338,7 +341,7 @@ async fn run<B: Backend>(
     terminal.draw(|f| ui(f, app))?;
     check_events(terminal, app, tick_rate, &mut last_tick)?;
 
-    if update_pr {
+    if config.update_pr {
         app.add_log("INFO", "Updating existing pull request...");
     } else {
         app.add_log("INFO", "Creating new pull request...");
@@ -347,8 +350,8 @@ async fn run<B: Backend>(
         app,
         &commit_title,
         &commit_details.unwrap_or_default(),
-        update_pr,
-        ready,
+        config.update_pr,
+        config.ready,
         &current_branch_merge_base,
         &current_branch,
     ) {
