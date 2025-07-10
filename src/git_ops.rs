@@ -408,6 +408,117 @@ fn commit_distance(from: &str, to: &str) -> Result<usize, Box<dyn Error>> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().parse()?)
 }
 
+/// Helper function to apply a patch with directory creation support
+fn apply_patch_with_directory_creation(
+    app: &mut App,
+    patch_file: &std::path::PathBuf,
+    is_staged: bool,
+) -> Result<(), Box<dyn Error>> {
+    let patch_path = patch_file.to_str().unwrap();
+    let change_type = if is_staged { "staged" } else { "unstaged" };
+
+    // Build git apply command args
+    let mut apply_args = vec!["apply"];
+    if is_staged {
+        apply_args.push("--cached");
+    }
+    apply_args.extend(["--3way", "--verbose", patch_path]);
+
+    // First try applying with 3-way merge
+    let output = Command::new("git").args(&apply_args).output()?;
+
+    if !output.status.success() {
+        // If 3-way merge fails, try creating directories first
+        app.add_log(
+            "INFO",
+            &format!(
+                "3-way merge failed for {} changes, trying to create directories first",
+                change_type
+            ),
+        );
+
+        // Extract directory paths from the patch
+        let patch_content = fs_err::read_to_string(patch_file)?;
+        let mut dirs_to_create = std::collections::HashSet::new();
+
+        for line in patch_content.lines() {
+            if line.starts_with("+++") || line.starts_with("---") {
+                if let Some(path) = line.split_whitespace().nth(1) {
+                    let path = path.trim_start_matches("b/");
+                    if path != "/dev/null" && !path.is_empty() {
+                        if let Some(parent) = std::path::Path::new(path).parent() {
+                            if !parent.as_os_str().is_empty() {
+                                dirs_to_create.insert(parent.to_path_buf());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Create directories
+        for dir in dirs_to_create {
+            if let Err(e) = fs_err::create_dir_all(&dir) {
+                app.add_log(
+                    "WARN",
+                    &format!("Failed to create directory {}: {}", dir.display(), e),
+                );
+            } else {
+                app.add_log("INFO", &format!("Created directory: {}", dir.display()));
+            }
+        }
+
+        // Try applying again
+        let retry_output = Command::new("git").args(&apply_args).output()?;
+
+        if !retry_output.status.success() {
+            app.add_log(
+                "WARN",
+                &format!(
+                    "Failed to reapply {} changes after pull - some changes may be lost",
+                    change_type
+                ),
+            );
+            app.add_log(
+                "INFO",
+                &format!(
+                    "{} patch available at: {}",
+                    change_type,
+                    patch_file.display()
+                ),
+            );
+            let manual_cmd = if is_staged {
+                "git apply --cached --3way <patch-file>"
+            } else {
+                "git apply --3way <patch-file>"
+            };
+            app.add_log("INFO", &format!("To manually apply: {}", manual_cmd));
+            app.add_log(
+                "ERROR",
+                &format!(
+                    "Git apply error: {}",
+                    String::from_utf8_lossy(&retry_output.stderr)
+                ),
+            );
+        } else {
+            app.add_log(
+                "INFO",
+                &format!(
+                    "Successfully reapplied {} changes after creating directories",
+                    change_type
+                ),
+            );
+        }
+    } else {
+        app.add_log(
+            "INFO",
+            &format!("Successfully reapplied {} changes", change_type),
+        );
+    }
+
+    Ok(())
+}
+
 pub fn git_fetch_main(
     app: &mut App,
     current_branch: &String,
@@ -487,42 +598,12 @@ pub fn git_fetch_main(
 
             // Reapply staged changes
             if let Some(ref patch_file) = staged_patch_file {
-                let output = Command::new("git")
-                    .args(["apply", "--cached", patch_file.to_str().unwrap()])
-                    .output()?;
-                if !output.status.success() {
-                    app.add_log(
-                        "WARN",
-                        "Failed to reapply staged changes after pull - some changes may be lost",
-                    );
-                    app.add_log(
-                        "INFO",
-                        format!("Staged patch available at: {}", patch_file.display()),
-                    );
-                    app.add_log("INFO", "To manually apply: git apply --cached <patch-file>");
-                } else {
-                    app.add_log("INFO", "Successfully reapplied staged changes");
-                }
+                apply_patch_with_directory_creation(app, patch_file, true)?;
             }
 
             // Reapply unstaged changes
             if let Some(ref patch_file) = unstaged_patch_file {
-                let output = Command::new("git")
-                    .args(["apply", patch_file.to_str().unwrap()])
-                    .output()?;
-                if !output.status.success() {
-                    app.add_log(
-                        "WARN",
-                        "Failed to reapply unstaged changes after pull - some changes may be lost",
-                    );
-                    app.add_log(
-                        "INFO",
-                        format!("Unstaged patch available at: {}", patch_file.display()),
-                    );
-                    app.add_log("INFO", "To manually apply: git apply <patch-file>");
-                } else {
-                    app.add_log("INFO", "Successfully reapplied unstaged changes");
-                }
+                apply_patch_with_directory_creation(app, patch_file, false)?;
             }
 
             // Provide user guidance on patch files
