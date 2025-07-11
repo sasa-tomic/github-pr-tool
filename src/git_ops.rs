@@ -966,6 +966,91 @@ pub fn create_or_update_pull_request(
     Ok(())
 }
 
+/// Updates the original worktree to switch to the PR branch and pull the latest changes.
+/// This is called from within a temp worktree before it's cleaned up.
+pub fn update_original_worktree_to_pr_branch(
+    app: &mut App,
+    pr_branch: &str,
+    _original_branch: &str,
+    original_root: &PathBuf,
+) -> Result<(), Box<dyn Error>> {
+    let current_dir = std::env::current_dir()?;
+
+    // Switch to original worktree directory
+    std::env::set_current_dir(original_root)?;
+
+    let result = (|| -> Result<(), Box<dyn Error>> {
+        // First, fetch the PR branch to ensure it exists in the original worktree
+        app.add_log(
+            "INFO",
+            format!("Fetching PR branch '{}' to original worktree", pr_branch),
+        );
+        let fetch_output = Command::new("git")
+            .args(["fetch", "origin", &format!("{}:{}", pr_branch, pr_branch)])
+            .output()?;
+
+        if !fetch_output.status.success() {
+            // If fetch fails, try to create the branch tracking the remote
+            app.add_log("INFO", "Fetch failed, trying to create tracking branch");
+            let create_output = Command::new("git")
+                .args([
+                    "checkout",
+                    "-b",
+                    pr_branch,
+                    &format!("origin/{}", pr_branch),
+                ])
+                .output()?;
+
+            if !create_output.status.success() {
+                app.add_error(format!(
+                    "Failed to create or fetch PR branch: {}",
+                    String::from_utf8_lossy(&create_output.stderr)
+                ));
+                return Err("Failed to create or fetch PR branch".into());
+            }
+        } else {
+            // Switch to the PR branch
+            app.add_log("INFO", format!("Switching to PR branch '{}'", pr_branch));
+            let checkout_output = Command::new("git").args(["checkout", pr_branch]).output()?;
+
+            if !checkout_output.status.success() {
+                app.add_error(format!(
+                    "Failed to checkout PR branch: {}",
+                    String::from_utf8_lossy(&checkout_output.stderr)
+                ));
+                return Err("Failed to checkout PR branch".into());
+            }
+        }
+
+        // Pull the latest changes
+        app.add_log("INFO", "Pulling latest changes from origin");
+        let pull_output = Command::new("git")
+            .args(["pull", "origin", pr_branch])
+            .output()?;
+
+        if !pull_output.status.success() {
+            app.add_log(
+                "WARN",
+                format!(
+                    "Pull failed (this may be normal if branch is up to date): {}",
+                    String::from_utf8_lossy(&pull_output.stderr)
+                ),
+            );
+        }
+
+        app.add_log(
+            "SUCCESS",
+            format!("Original worktree updated to PR branch '{}'", pr_branch),
+        );
+        Ok(())
+    })();
+
+    // Always switch back to the temp worktree directory
+    std::env::set_current_dir(&current_dir)?;
+
+    result
+}
+
 #[cfg(test)]
 #[path = "git_ops/tests.rs"]
 mod tests;

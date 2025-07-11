@@ -261,6 +261,11 @@ impl TempWorktree {
             orig_branch,
         })
     }
+
+    /// Get the original worktree root path
+    pub fn original_root(&self) -> &PathBuf {
+        &self.orig_root
+    }
 }
 
 impl Drop for TempWorktree {
