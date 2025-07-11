@@ -980,45 +980,79 @@ pub fn update_original_worktree_to_pr_branch(
     std::env::set_current_dir(original_root)?;
 
     let result = (|| -> Result<(), Box<dyn Error>> {
-        // First, fetch the PR branch to ensure it exists in the original worktree
+        // First, check if the branch exists locally
         app.add_log(
             "INFO",
-            format!("Fetching PR branch '{}' to original worktree", pr_branch),
+            format!("Checking if PR branch '{}' exists locally", pr_branch),
         );
-        let fetch_output = Command::new("git")
-            .args(["fetch", "origin", &format!("{}:{}", pr_branch, pr_branch)])
+        let check_local_output = Command::new("git")
+            .args(["rev-parse", "--verify", pr_branch])
             .output()?;
 
-        if !fetch_output.status.success() {
-            // If fetch fails, try to create the branch tracking the remote
-            app.add_log("INFO", "Fetch failed, trying to create tracking branch");
-            let create_output = Command::new("git")
-                .args([
-                    "checkout",
-                    "-b",
-                    pr_branch,
-                    &format!("origin/{}", pr_branch),
-                ])
-                .output()?;
-
-            if !create_output.status.success() {
-                app.add_error(format!(
-                    "Failed to create or fetch PR branch: {}",
-                    String::from_utf8_lossy(&create_output.stderr)
-                ));
-                return Err("Failed to create or fetch PR branch".into());
-            }
-        } else {
-            // Switch to the PR branch
-            app.add_log("INFO", format!("Switching to PR branch '{}'", pr_branch));
+        if check_local_output.status.success() {
+            // Branch exists locally, just checkout to it
+            app.add_log(
+                "INFO",
+                format!("Branch '{}' exists locally, checking out", pr_branch),
+            );
             let checkout_output = Command::new("git").args(["checkout", pr_branch]).output()?;
 
             if !checkout_output.status.success() {
                 app.add_error(format!(
-                    "Failed to checkout PR branch: {}",
+                    "Failed to checkout existing PR branch: {}",
                     String::from_utf8_lossy(&checkout_output.stderr)
                 ));
-                return Err("Failed to checkout PR branch".into());
+                return Err("Failed to checkout existing PR branch".into());
+            }
+        } else {
+            // Branch doesn't exist locally, try to fetch/create it
+            app.add_log(
+                "INFO",
+                format!(
+                    "Branch '{}' doesn't exist locally, fetching from remote",
+                    pr_branch
+                ),
+            );
+
+            // First try to fetch the branch
+            let fetch_output = Command::new("git")
+                .args(["fetch", "origin", &format!("{}:{}", pr_branch, pr_branch)])
+                .output()?;
+
+            if !fetch_output.status.success() {
+                // If fetch fails, try to create the branch tracking the remote
+                app.add_log("INFO", "Fetch failed, trying to create tracking branch");
+                let create_output = Command::new("git")
+                    .args([
+                        "checkout",
+                        "-b",
+                        pr_branch,
+                        &format!("origin/{}", pr_branch),
+                    ])
+                    .output()?;
+
+                if !create_output.status.success() {
+                    app.add_error(format!(
+                        "Failed to create tracking branch: {}",
+                        String::from_utf8_lossy(&create_output.stderr)
+                    ));
+                    return Err("Failed to create tracking branch".into());
+                }
+            } else {
+                // Fetch succeeded, now checkout to the branch
+                app.add_log(
+                    "INFO",
+                    format!("Fetched branch '{}', checking out", pr_branch),
+                );
+                let checkout_output = Command::new("git").args(["checkout", pr_branch]).output()?;
+
+                if !checkout_output.status.success() {
+                    app.add_error(format!(
+                        "Failed to checkout fetched PR branch: {}",
+                        String::from_utf8_lossy(&checkout_output.stderr)
+                    ));
+                    return Err("Failed to checkout fetched PR branch".into());
+                }
             }
         }
 
