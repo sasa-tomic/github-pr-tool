@@ -1056,20 +1056,46 @@ pub fn update_original_worktree_to_pr_branch(
             }
         }
 
-        // Pull the latest changes
-        app.add_log("INFO", "Pulling latest changes from origin");
+        // Pull the latest changes with rebase for cleaner history
+        app.add_log("INFO", "Pulling latest changes from origin (with rebase)");
         let pull_output = Command::new("git")
-            .args(["pull", "origin", pr_branch])
+            .args(["pull", "--rebase", "origin", pr_branch])
             .output()?;
 
         if !pull_output.status.success() {
-            app.add_log(
-                "WARN",
-                format!(
-                    "Pull failed (this may be normal if branch is up to date): {}",
-                    String::from_utf8_lossy(&pull_output.stderr)
-                ),
-            );
+            let stderr = String::from_utf8_lossy(&pull_output.stderr);
+            if stderr.contains("rebase") || stderr.contains("conflict") {
+                app.add_log(
+                    "WARN",
+                    format!("Rebase failed, falling back to regular pull: {}", stderr),
+                );
+                // Fallback to regular pull
+                let fallback_output = Command::new("git")
+                    .args(["pull", "origin", pr_branch])
+                    .output()?;
+
+                if !fallback_output.status.success() {
+                    app.add_log(
+                        "WARN",
+                        format!(
+                            "Pull failed (this may be normal if branch is up to date): {}",
+                            String::from_utf8_lossy(&fallback_output.stderr)
+                        ),
+                    );
+                } else {
+                    app.add_log("INFO", "Successfully pulled with regular merge");
+                }
+            } else {
+                app.add_log(
+                    "WARN",
+                    format!(
+                        "Pull failed (this may be normal if branch is up to date): {}",
+                        stderr
+                    ),
+                );
+            }
+        } else {
+            app.add_log("INFO", "Successfully pulled with rebase");
         }
 
         app.add_log(
