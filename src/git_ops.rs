@@ -1003,11 +1003,41 @@ pub fn update_original_worktree_to_pr_branch(
             .output()?;
 
         if check_local_output.status.success() {
-            // Branch exists locally, just checkout to it
+            // Branch exists locally, check for local changes first
             app.add_log(
                 "INFO",
                 format!("Branch '{}' exists locally, checking out", pr_branch),
             );
+
+            // Check if there are local changes that would be overwritten
+            let status_output = Command::new("git")
+                .args(["status", "--porcelain"])
+                .output()?;
+
+            let has_local_changes = !String::from_utf8_lossy(&status_output.stdout)
+                .trim()
+                .is_empty();
+
+            if has_local_changes {
+                app.add_log("INFO", "Local changes detected, stashing before checkout");
+                let stash_output = Command::new("git")
+                    .args([
+                        "stash",
+                        "push",
+                        "-m",
+                        "gh-autopr: temp stash for branch checkout",
+                    ])
+                    .output()?;
+
+                if !stash_output.status.success() {
+                    app.add_error(format!(
+                        "Failed to stash local changes: {}",
+                        String::from_utf8_lossy(&stash_output.stderr)
+                    ));
+                    return Err("Failed to stash local changes".into());
+                }
+            }
+
             let checkout_output = Command::new("git").args(["checkout", pr_branch]).output()?;
 
             if !checkout_output.status.success() {
@@ -1115,6 +1145,26 @@ pub fn update_original_worktree_to_pr_branch(
             "SUCCESS",
             format!("Original worktree updated to PR branch '{}'", pr_branch),
         );
+
+        // Check if there are any stashes created by our process
+        let stash_list_output = Command::new("git")
+            .args([
+                "stash",
+                "list",
+                "--grep=gh-autopr: temp stash for branch checkout",
+            ])
+            .output()?;
+
+        if !String::from_utf8_lossy(&stash_list_output.stdout)
+            .trim()
+            .is_empty()
+        {
+            app.add_log(
+                "INFO",
+                "Local changes were stashed before checkout. Use 'git stash pop' to restore them if needed.",
+            );
+        }
+
         Ok(())
     })();
 
