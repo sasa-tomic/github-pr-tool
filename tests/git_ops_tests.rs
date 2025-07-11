@@ -460,7 +460,7 @@ fn test_update_original_worktree_to_pr_branch() {
     assert!(app.logs.iter().any(|(level, msg)| {
         *level == "INFO"
             && msg.contains(&format!(
-                "Fetching PR branch '{}' to original worktree",
+                "Checking if PR branch '{}' exists locally",
                 pr_branch
             ))
     }));
