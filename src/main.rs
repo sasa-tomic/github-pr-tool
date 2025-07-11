@@ -62,53 +62,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse command line arguments
     let args = Args::parse();
 
-    // Initialize the terminal FIRST for better error handling
-    enable_raw_mode()?;
-    let mut stdout = std::io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-    terminal.clear()?;
+    // Handle branch pruning early - no TUI needed
+    if args.prune_branches {
+        let mut app = App::new("GitHub PR Auto-Submit");
 
-    let mut app = App::new("GitHub PR Auto-Submit");
-    let tick_rate = Duration::from_millis(250);
-
-    let config = RunConfig {
-        update_pr: args.update_pr,
-        ready: args.ready,
-        what: args.what,
-        why: args.why,
-        bigger_picture: args.bigger_picture,
-        prune_branches: args.prune_branches,
-    };
-
-    // Do git operations that need original worktree BEFORE entering temp worktree
-    let pre_worktree_result = pre_worktree_setup(&mut terminal, &mut app, tick_rate).await;
-
-    // Handle any pre-worktree errors
-    if let Err(e) = pre_worktree_result {
-        // restore terminal
-        disable_raw_mode()?;
-        execute!(
-            terminal.backend_mut(),
-            LeaveAlternateScreen,
-            DisableMouseCapture
-        )?;
-        terminal.show_cursor()?;
-        eprintln!("ERROR in pre-worktree setup: {}", e);
-        return Err(e);
-    }
-
-    // Handle branch pruning if requested
-    if config.prune_branches {
-        // Clean up terminal immediately for pruning mode
-        disable_raw_mode()?;
-        execute!(
-            terminal.backend_mut(),
-            LeaveAlternateScreen,
-            DisableMouseCapture
-        )?;
-        terminal.show_cursor()?;
+        // Basic git checks without TUI
+        git_ensure_in_repo(&mut app)?;
+        git_cd_to_repo_root(&mut app)?;
 
         // Run pruning operation
         let prune_result = prune_merged_branches(&mut app);
@@ -127,6 +87,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         return Ok(());
+    }
+
+    // Initialize the terminal for PR creation mode
+    enable_raw_mode()?;
+    let mut stdout = std::io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+    terminal.clear()?;
+
+    let mut app = App::new("GitHub PR Auto-Submit");
+    let tick_rate = Duration::from_millis(250);
+
+    let config = RunConfig {
+        update_pr: args.update_pr,
+        ready: args.ready,
+        what: args.what,
+        why: args.why,
+        bigger_picture: args.bigger_picture,
+    };
+
+    // Do git operations that need original worktree BEFORE entering temp worktree
+    let pre_worktree_result = pre_worktree_setup(&mut terminal, &mut app, tick_rate).await;
+
+    // Handle any pre-worktree errors
+    if let Err(e) = pre_worktree_result {
+        // restore terminal
+        disable_raw_mode()?;
+        execute!(
+            terminal.backend_mut(),
+            LeaveAlternateScreen,
+            DisableMouseCapture
+        )?;
+        terminal.show_cursor()?;
+        eprintln!("ERROR in pre-worktree setup: {}", e);
+        return Err(e);
     }
 
     // All subsequent Git commands act inside the isolated worktree, that is automatically cleaned up.
@@ -164,7 +160,6 @@ struct RunConfig {
     what: Option<String>,
     why: Option<String>,
     bigger_picture: Option<String>,
-    prune_branches: bool,
 }
 
 async fn pre_worktree_setup<B: Backend>(
