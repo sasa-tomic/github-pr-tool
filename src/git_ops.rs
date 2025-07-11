@@ -1,6 +1,7 @@
 use crate::tui::{render_message, App};
 use ratatui::style::Color;
 use ratatui::{backend::Backend, Terminal};
+use std::collections::HashMap;
 use std::error::Error;
 use std::path::PathBuf;
 use std::process::Command;
@@ -1172,6 +1173,246 @@ pub fn update_original_worktree_to_pr_branch(
     std::env::set_current_dir(&current_dir)?;
 
     result
+}
+
+/// Get merged PRs and their associated branches
+pub fn get_merged_prs_and_branches(
+    app: &mut App,
+) -> Result<HashMap<String, String>, Box<dyn Error>> {
+    app.add_log("INFO", "Fetching merged PRs...");
+
+    let output = Command::new("gh")
+        .args([
+            "pr",
+            "list",
+            "--state",
+            "merged",
+            "--json",
+            "headRefName,number,title",
+        ])
+        .output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        app.add_error(format!("Failed to get merged PRs: {}", stderr));
+        return Err("Failed to get merged PRs".into());
+    }
+
+    let json_str = String::from_utf8(output.stdout)?;
+    let prs: Vec<serde_json::Value> = serde_json::from_str(&json_str)?;
+
+    let mut merged_branches = HashMap::new();
+    for pr in prs {
+        if let (Some(branch), Some(number)) = (pr["headRefName"].as_str(), pr["number"].as_u64()) {
+            merged_branches.insert(branch.to_string(), format!("PR #{}", number));
+        }
+    }
+
+    app.add_log(
+        "INFO",
+        format!("Found {} merged PRs", merged_branches.len()),
+    );
+    Ok(merged_branches)
+}
+
+/// Get local branches and their remote tracking branches
+pub fn get_local_branches_with_remotes(
+    app: &mut App,
+) -> Result<HashMap<String, Option<String>>, Box<dyn Error>> {
+    app.add_log("INFO", "Getting local branches...");
+
+    let output = Command::new("git").args(["branch", "-vv"]).output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        app.add_error(format!("Failed to get local branches: {}", stderr));
+        return Err("Failed to get local branches".into());
+    }
+
+    let branch_output = String::from_utf8(output.stdout)?;
+    let mut branches = HashMap::new();
+
+    for line in branch_output.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        // Parse git branch -vv output format
+        // Example: "* main                 1234567 [origin/main] Latest commit"
+        // Example: "  feature-branch       abcdef1 [origin/feature-branch: ahead 1] Add feature"
+
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 3 {
+            continue;
+        }
+
+        let branch_name = if parts[0] == "*" {
+            parts[1] // Current branch, name is in second position
+        } else {
+            parts[0] // Non-current branch, name is in first position
+        };
+
+        // Skip if this is the current branch indicator
+        if branch_name == "*" {
+            continue;
+        }
+
+        // Look for remote tracking branch in brackets
+        let remote_branch = if let Some(bracket_start) = line.find('[') {
+            if let Some(bracket_end) = line.find(']') {
+                let remote_info = &line[bracket_start + 1..bracket_end];
+                // Extract just the remote branch name (before any : or other info)
+                let remote_branch = remote_info.split(':').next().unwrap_or(remote_info).trim();
+                Some(remote_branch.to_string())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        branches.insert(branch_name.to_string(), remote_branch);
+    }
+
+    app.add_log("INFO", format!("Found {} local branches", branches.len()));
+    Ok(branches)
+}
+
+/// Check if a remote branch exists
+pub fn remote_branch_exists(_app: &mut App, remote_branch: &str) -> Result<bool, Box<dyn Error>> {
+    let output = Command::new("git")
+        .args(["ls-remote", "--exit-code", "origin", remote_branch])
+        .output()?;
+
+    Ok(output.status.success())
+}
+
+/// Delete a local branch
+pub fn delete_local_branch(app: &mut App, branch_name: &str) -> Result<(), Box<dyn Error>> {
+    app.add_log("INFO", format!("Deleting local branch: {}", branch_name));
+
+    let output = Command::new("git")
+        .args(["branch", "-D", branch_name])
+        .output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        app.add_error(format!(
+            "Failed to delete branch {}: {}",
+            branch_name, stderr
+        ));
+        return Err(format!("Failed to delete branch {}", branch_name).into());
+    }
+
+    app.add_log("SUCCESS", format!("Deleted local branch: {}", branch_name));
+    Ok(())
+}
+
+/// Main function to prune merged branches
+pub fn prune_merged_branches(app: &mut App) -> Result<(), Box<dyn Error>> {
+    app.add_log("INFO", "Starting branch pruning process...");
+
+    // Get merged PRs and their branches
+    let merged_prs = get_merged_prs_and_branches(app)?;
+
+    // Get local branches with their remotes
+    let local_branches = get_local_branches_with_remotes(app)?;
+
+    // Get current branch to avoid deleting it
+    let current_branch = git_current_branch(app)?;
+
+    // Get main branch to avoid deleting it
+    let main_branch = git_main_branch(app).unwrap_or_else(|_| "main".to_string());
+
+    let mut deleted_count = 0;
+    let mut skipped_count = 0;
+
+    for (local_branch, remote_branch_opt) in local_branches {
+        // Skip current branch
+        if local_branch == current_branch {
+            app.add_log("INFO", format!("Skipping current branch: {}", local_branch));
+            skipped_count += 1;
+            continue;
+        }
+
+        // Skip main branch
+        if local_branch == main_branch {
+            app.add_log("INFO", format!("Skipping main branch: {}", local_branch));
+            skipped_count += 1;
+            continue;
+        }
+
+        // Check if this branch corresponds to a merged PR
+        if merged_prs.contains_key(&local_branch) {
+            // Branch was merged via PR, safe to delete
+            match delete_local_branch(app, &local_branch) {
+                Ok(_) => {
+                    let pr_info = merged_prs.get(&local_branch).unwrap();
+                    app.add_log("SUCCESS", format!("Deleted {} ({})", local_branch, pr_info));
+                    deleted_count += 1;
+                }
+                Err(e) => {
+                    app.add_error(format!("Failed to delete {}: {}", local_branch, e));
+                }
+            }
+        } else if let Some(remote_branch) = remote_branch_opt {
+            // Check if remote branch still exists
+            match remote_branch_exists(app, &remote_branch) {
+                Ok(false) => {
+                    // Remote branch doesn't exist, likely merged and deleted
+                    app.add_log(
+                        "INFO",
+                        format!(
+                            "Remote branch {} no longer exists, deleting local branch {}",
+                            remote_branch, local_branch
+                        ),
+                    );
+                    match delete_local_branch(app, &local_branch) {
+                        Ok(_) => {
+                            deleted_count += 1;
+                        }
+                        Err(e) => {
+                            app.add_error(format!("Failed to delete {}: {}", local_branch, e));
+                        }
+                    }
+                }
+                Ok(true) => {
+                    app.add_log(
+                        "INFO",
+                        format!(
+                            "Remote branch {} still exists, keeping local branch {}",
+                            remote_branch, local_branch
+                        ),
+                    );
+                    skipped_count += 1;
+                }
+                Err(e) => {
+                    app.add_error(format!(
+                        "Failed to check remote branch {}: {}",
+                        remote_branch, e
+                    ));
+                    skipped_count += 1;
+                }
+            }
+        } else {
+            // No remote tracking branch, skip
+            app.add_log(
+                "INFO",
+                format!("No remote tracking branch for {}, skipping", local_branch),
+            );
+            skipped_count += 1;
+        }
+    }
+
+    app.add_log(
+        "SUCCESS",
+        format!(
+            "Branch pruning completed: {} deleted, {} skipped",
+            deleted_count, skipped_count
+        ),
+    );
+    Ok(())
 }
 
 #[cfg(test)]
