@@ -258,8 +258,9 @@ pub fn git_main_branch(app: &mut App) -> Result<String, Box<dyn Error>> {
             .output()?;
 
         if !output.status.success() {
-            app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
-            return Err("Failed to set origin HEAD".into());
+            let err = String::from_utf8_lossy(&output.stderr).to_string();
+            app.add_error(err.clone());
+            return Err(format!("Failed to set origin HEAD: {}", err).into());
         }
 
         main_branch_output = Command::new("git")
@@ -267,8 +268,9 @@ pub fn git_main_branch(app: &mut App) -> Result<String, Box<dyn Error>> {
             .output()?;
 
         if !main_branch_output.status.success() {
-            app.add_error(String::from_utf8_lossy(&main_branch_output.stderr).to_string());
-            return Err("Failed to determine main branch".into());
+            let err = String::from_utf8_lossy(&main_branch_output.stderr).to_string();
+            app.add_error(err.clone());
+            return Err(format!("Failed to determine main branch: {}", err).into());
         }
     }
 
@@ -286,8 +288,9 @@ pub fn git_current_branch(app: &mut App) -> Result<String, Box<dyn Error>> {
         .output()?;
 
     if !output.status.success() {
-        app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
-        return Err("Failed to get current branch".into());
+        let err = String::from_utf8_lossy(&output.stderr).to_string();
+        app.add_error(err.clone());
+        return Err(format!("Failed to get current branch: {}", err).into());
     }
 
     let branch = String::from_utf8(output.stdout)?.trim().to_string();
@@ -591,8 +594,9 @@ pub fn git_fetch_main(
             // Pull latest changes
             let output = Command::new("git").args(["pull", "origin"]).output()?;
             if !output.status.success() {
-                app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
-                return Err("Failed to pull from origin".into());
+                let err = String::from_utf8_lossy(&output.stderr).to_string();
+                app.add_error(err.clone());
+                return Err(format!("Failed to pull from origin: {}", err).into());
             }
             app.add_log("INFO", "Pulled latest changes from origin");
 
@@ -623,8 +627,9 @@ pub fn git_fetch_main(
         // Only reach here if no staged changes were detected
         let output = Command::new("git").args(["pull", "origin"]).output()?;
         if !output.status.success() {
-            app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
-            return Err("Failed to pull from origin".into());
+            let err = String::from_utf8_lossy(&output.stderr).to_string();
+            app.add_error(err.clone());
+            return Err(format!("Failed to pull from origin: {}", err).into());
         }
         app.add_log("INFO", "Pulled latest changes from origin");
     } else {
@@ -636,8 +641,9 @@ pub fn git_fetch_main(
             ])
             .output()?;
         if !output.status.success() {
-            app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
-            return Err("Failed to fetch main branch".into());
+            let err = String::from_utf8_lossy(&output.stderr).to_string();
+            app.add_error(err.clone());
+            return Err(format!("Failed to fetch main branch: {}", err).into());
         }
         app.add_log("INFO", format!("Fetched latest {} branch", main_branch));
     }
@@ -651,8 +657,9 @@ pub fn git_checkout_branch(app: &mut App, branch_name: &str) -> Result<String, B
         .output()?;
 
     if !output.status.success() {
-        app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
-        return Err("Failed to checkout branch".into());
+        let err = String::from_utf8_lossy(&output.stderr).to_string();
+        app.add_error(err.clone());
+        return Err(format!("Failed to checkout branch: {}", err).into());
     }
 
     app.add_log("INFO", format!("Checked out branch: {}", branch_name));
@@ -713,8 +720,9 @@ pub fn git_commit_staged_changes(
         .args(["commit", "-m", &commit_message])
         .output()?;
     if !output.status.success() {
-        app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
-        return Err("Failed to commit changes".into());
+        let err = String::from_utf8_lossy(&output.stderr).to_string();
+        app.add_error(err.clone());
+        return Err(format!("Failed to commit changes: {}", err).into());
     }
     app.add_log("INFO", "Committed changes successfully");
 
@@ -727,8 +735,9 @@ pub fn git_pull_branch(app: &mut App, branch_name: &str) -> Result<(), Box<dyn E
         .output()?;
 
     if !output.status.success() {
-        app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
-        return Err("Failed to pull branch".into());
+        let err = String::from_utf8_lossy(&output.stderr).to_string();
+        app.add_error(err.clone());
+        return Err(format!("Failed to pull branch: {}", err).into());
     }
 
     app.add_log("INFO", format!("Pulled branch: {}", branch_name));
@@ -768,8 +777,9 @@ pub fn git_stash_pop_autostash_if_exists(app: &mut App) -> Result<(), Box<dyn Er
         .output()?;
 
     if !output.status.success() {
-        app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
-        return Err("Failed to list stashes".into());
+        let err = String::from_utf8_lossy(&output.stderr).to_string();
+        app.add_error(err.clone());
+        return Err(format!("Failed to list stashes: {}", err).into());
     }
 
     let stash_list = String::from_utf8(output.stdout)?;
@@ -785,8 +795,9 @@ pub fn git_stash_pop_autostash_if_exists(app: &mut App) -> Result<(), Box<dyn Er
                 .output()?;
 
             if !output.status.success() {
-                app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
-                return Err("Failed to apply stash".into());
+                let err = String::from_utf8_lossy(&output.stderr).to_string();
+                app.add_error(err.clone());
+                return Err(format!("Failed to apply stash: {}", err).into());
             }
             app.add_log("INFO", format!("Applied {}", AUTOSTASH_NAME));
             return Ok(());
@@ -812,8 +823,9 @@ pub fn git_stage_and_commit(
         if output.status.success() {
             app.add_log("INFO", "Staged all changes");
         } else {
-            app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
-            return Err("Failed to stage changes".into());
+            let err = String::from_utf8_lossy(&output.stderr).to_string();
+            app.add_error(err.clone());
+            return Err(format!("Failed to stage changes: {}", err).into());
         }
     }
 
@@ -843,8 +855,9 @@ pub fn git_push_branch(app: &mut App, branch_name: &str) -> Result<(), Box<dyn E
     let output = Command::new("git").args(&push_args).output()?;
 
     if !output.status.success() {
-        app.add_error(String::from_utf8_lossy(&output.stderr).to_string());
-        return Err("Failed to push branch".into());
+        let err = String::from_utf8_lossy(&output.stderr).to_string();
+        app.add_error(err.clone());
+        return Err(format!("Failed to push branch: {}", err).into());
     }
 
     app.add_log("INFO", format!("Pushed branch {} to origin", branch_name));
