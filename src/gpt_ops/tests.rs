@@ -184,3 +184,56 @@ fn test_conventional_commits_examples() {
     assert!(system_message.starts_with("feat"));
     assert!(system_message.contains(":"));
 }
+
+#[test]
+fn test_valid_git_branch_names() {
+    // Test valid branch names
+    assert!(is_valid_git_branch_name("feature/add-tests"));
+    assert!(is_valid_git_branch_name("fix-memory-leak"));
+    assert!(is_valid_git_branch_name("feat/worktree-update"));
+    assert!(is_valid_git_branch_name("release/v1.0.0"));
+    assert!(is_valid_git_branch_name("hotfix/security-patch"));
+    assert!(is_valid_git_branch_name("main"));
+    assert!(is_valid_git_branch_name("develop"));
+    assert!(is_valid_git_branch_name("feature_branch"));
+    assert!(is_valid_git_branch_name("123-fix-issue"));
+    assert!(is_valid_git_branch_name("user/feature"));
+}
+
+#[test]
+fn test_invalid_git_branch_names() {
+    // Test invalid branch names - these should all return false
+    assert!(!is_valid_git_branch_name("feat(worktree): update"));
+    assert!(!is_valid_git_branch_name("fix memory leak"));
+    assert!(!is_valid_git_branch_name("feature: add validation"));
+    assert!(!is_valid_git_branch_name("branch with spaces"));
+    assert!(!is_valid_git_branch_name(""));
+    assert!(!is_valid_git_branch_name("-"));
+    assert!(!is_valid_git_branch_name(".hidden"));
+    assert!(!is_valid_git_branch_name("branch."));
+    assert!(!is_valid_git_branch_name("branch..name"));
+    assert!(!is_valid_git_branch_name("branch@name"));
+    assert!(!is_valid_git_branch_name("branch#name"));
+    assert!(!is_valid_git_branch_name("branch$name"));
+    assert!(!is_valid_git_branch_name("branch%name"));
+    assert!(!is_valid_git_branch_name("branch^name"));
+    assert!(!is_valid_git_branch_name("branch&name"));
+    assert!(!is_valid_git_branch_name("branch*name"));
+    assert!(!is_valid_git_branch_name("branch(name)"));
+    assert!(!is_valid_git_branch_name("branch[name]"));
+    assert!(!is_valid_git_branch_name("branch{name}"));
+    assert!(!is_valid_git_branch_name("branch|name"));
+    assert!(!is_valid_git_branch_name("branch\\name"));
+    assert!(!is_valid_git_branch_name("branch?name"));
+    assert!(!is_valid_git_branch_name("branch<name>"));
+    assert!(!is_valid_git_branch_name("branch,name"));
+    assert!(!is_valid_git_branch_name("branch;name"));
+    assert!(!is_valid_git_branch_name("branch:name"));
+    assert!(!is_valid_git_branch_name("branch\"name"));
+    assert!(!is_valid_git_branch_name("branch'name"));
+    assert!(!is_valid_git_branch_name("branch~name"));
+    assert!(!is_valid_git_branch_name("branch`name"));
+    assert!(!is_valid_git_branch_name("branch!name"));
+    assert!(!is_valid_git_branch_name("branch+name"));
+    assert!(!is_valid_git_branch_name("branch=name"));
+}

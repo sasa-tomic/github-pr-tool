@@ -4,6 +4,39 @@ use openai::{
     Credentials,
 };
 
+/// Validates if a string is a valid git branch name
+///
+/// Git branch names must not contain:
+/// - Spaces
+/// - Special characters like :, (, ), [, ], {, }, ?, *, ^, ~, \, etc.
+/// - Start or end with dots
+/// - Consecutive dots
+/// - Be empty or just a dash
+fn is_valid_git_branch_name(name: &str) -> bool {
+    if name.is_empty() || name == "-" {
+        return false;
+    }
+
+    if name.starts_with('.') || name.ends_with('.') {
+        return false;
+    }
+
+    if name.contains("..") {
+        return false;
+    }
+
+    // Check for invalid characters
+    for c in name.chars() {
+        match c {
+            // Allow alphanumeric, hyphens, underscores, forward slashes, and dots
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '/' | '.' => continue,
+            _ => return false,
+        }
+    }
+
+    true
+}
+
 pub async fn gpt_generate_branch_name_and_commit_description(
     app: &mut App<'_>,
     diff_context: String,
@@ -17,6 +50,19 @@ pub async fn gpt_generate_branch_name_and_commit_description(
     let mut system_message_content = String::from(
         "You are a helpful assistant that helps to prepare GitHub Pull Requests.
         You will provide output in JSON format with EXACTLY the following keys: 'branch_name', 'commit_title', and 'commit_details'.
+
+        CRITICAL: The 'branch_name' field must be a valid git branch name containing only:
+        - Letters (a-z, A-Z)
+        - Numbers (0-9)
+        - Hyphens (-)
+        - Underscores (_)
+        - Up to 1 forward slash (/)
+        - Dots (.) but not at the beginning or end, and not consecutive
+
+        The branch name MUST NOT contain spaces, parentheses, colons, or any other special characters.
+        Examples of valid branch names: 'feat/worktree-update', 'fix-memory-leak', 'feature/add-validation', 'release/v1.0.0'
+        Examples of INVALID branch names: 'feat(worktree): update', 'fix memory leak', 'feature: add validation', '.hidden', 'branch.', 'branch..name'
+
         For a very small PR return 'commit_details' as null, otherwise politely in a well structured markdown format describe all major changes for the PR. The description should include the section 'What', 'Why', and 'Bigger Picture'. Leave a TODO for the sections where you do not have enough information to fill them in. Do not invent information if you cannot extrapolate it from the provided input.
         If there is a breaking change, add the 'impact' section.
 
@@ -124,6 +170,17 @@ pub async fn gpt_generate_branch_name_and_commit_description(
     let commit_details = parsed_response["commit_details"]
         .as_str()
         .map(|s| s.to_string());
+
+    // Validate the branch name
+    if !is_valid_git_branch_name(&branch_name) {
+        let error_msg = format!(
+            "GPT returned invalid branch name: '{}'. Branch names must only contain letters, numbers, hyphens, underscores, and forward slashes. No spaces, parentheses, colons, or other special characters allowed.",
+            branch_name
+        );
+        app.add_error(error_msg.clone());
+        app.switch_to_tab(1);
+        return Err(error_msg.into());
+    }
 
     Ok((branch_name, commit_title, commit_details))
 }
