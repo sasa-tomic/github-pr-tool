@@ -37,6 +37,10 @@ struct Args {
     /// How do these changes fit into the bigger picture?
     #[arg(long, visible_aliases = ["bigger-picture", "biggerpicture", "context", "overview"])]
     bigger_picture: Option<String>,
+
+    /// Prune local branches that have been merged
+    #[arg(long, visible_aliases = ["prune", "cleanup"])]
+    prune_branches: bool,
 }
 use ratatui::{
     backend::{Backend, CrosstermBackend},
@@ -75,6 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         what: args.what,
         why: args.why,
         bigger_picture: args.bigger_picture,
+        prune_branches: args.prune_branches,
     };
 
     // Do git operations that need original worktree BEFORE entering temp worktree
@@ -92,6 +97,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         terminal.show_cursor()?;
         eprintln!("ERROR in pre-worktree setup: {}", e);
         return Err(e);
+    }
+
+    // Handle branch pruning if requested
+    if config.prune_branches {
+        // Clean up terminal immediately for pruning mode
+        disable_raw_mode()?;
+        execute!(
+            terminal.backend_mut(),
+            LeaveAlternateScreen,
+            DisableMouseCapture
+        )?;
+        terminal.show_cursor()?;
+
+        // Run pruning operation
+        let prune_result = prune_merged_branches(&mut app);
+
+        // Print logs
+        for (log_level, log_message) in &app.logs {
+            println!("{}: {}", log_level, log_message);
+        }
+
+        // Handle result
+        match prune_result {
+            Ok(_) => println!("Branch pruning completed successfully."),
+            Err(e) => {
+                eprintln!("ERROR in branch pruning: {}", e);
+                return Err(e);
+            }
+        }
+        return Ok(());
     }
 
     // All subsequent Git commands act inside the isolated worktree, that is automatically cleaned up.
@@ -129,6 +164,7 @@ struct RunConfig {
     what: Option<String>,
     why: Option<String>,
     bigger_picture: Option<String>,
+    prune_branches: bool,
 }
 
 async fn pre_worktree_setup<B: Backend>(
