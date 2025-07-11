@@ -97,7 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // All subsequent Git commands act inside the isolated worktree, that is automatically cleaned up.
     let tw = TempWorktree::enter()?;
 
-    let app_result = run(&mut terminal, &mut app, tick_rate, config, &tw).await;
+    let app_result = run(&mut terminal, &mut app, tick_rate, config, tw).await;
 
     // restore terminal
     disable_raw_mode()?;
@@ -182,7 +182,7 @@ async fn run<B: Backend>(
     app: &mut App<'_>,
     tick_rate: Duration,
     config: RunConfig,
-    temp_worktree: &TempWorktree,
+    temp_worktree: TempWorktree,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut last_tick = Instant::now();
 
@@ -450,16 +450,10 @@ async fn run<B: Backend>(
         terminal.draw(|f| ui(f, app))?;
         check_events(terminal, app, tick_rate, &mut last_tick)?;
 
-        // We need to update the original worktree to be on the PR branch
-        // This must be done BEFORE the temp worktree is dropped
-        update_original_worktree_to_pr_branch(
-            app,
-            &current_branch,
-            &original_branch,
-            temp_worktree.original_root(),
-        )?;
-        terminal.draw(|f| ui(f, app))?;
-        check_events(terminal, app, tick_rate, &mut last_tick)?;
+        // Store information for cleanup after temp worktree is dropped
+        let pr_branch = current_branch.clone();
+        let orig_branch = original_branch.clone();
+        let orig_root = temp_worktree.original_root().clone();
 
         app.add_log(
             "INFO",
@@ -467,13 +461,28 @@ async fn run<B: Backend>(
         );
         terminal.draw(|f| ui(f, app))?;
         check_events(terminal, app, tick_rate, &mut last_tick)?;
+
+        // Cancel the UI progress-update task
+        ui_update.abort();
+
+        // Await user input before finishing so the UI remains visible.
+        run_event_loop(terminal, app, tick_rate, &mut last_tick)?;
+
+        // Drop temp worktree explicitly to clean it up
+        std::mem::drop(temp_worktree);
+
+        // Now update the original worktree to PR branch (after temp worktree is cleaned up)
+        update_original_worktree_to_pr_branch(app, &pr_branch, &orig_branch, &orig_root)?;
     }
 
-    // Cancel the UI progress-update task
+    // Cancel the UI progress-update task (if not already done)
     ui_update.abort();
 
-    // Await user input before finishing so the UI remains visible.
-    run_event_loop(terminal, app, tick_rate, &mut last_tick)?;
+    // Await user input before finishing so the UI remains visible (if not already done)
+    if !is_in_temp_worktree() {
+        run_event_loop(terminal, app, tick_rate, &mut last_tick)?;
+    }
+
     Ok(())
 }
 
