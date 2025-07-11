@@ -95,9 +95,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // All subsequent Git commands act inside the isolated worktree, that is automatically cleaned up.
-    let _tw = TempWorktree::enter()?;
+    let tw = TempWorktree::enter()?;
 
-    let app_result = run(&mut terminal, &mut app, tick_rate, config).await;
+    let app_result = run(&mut terminal, &mut app, tick_rate, config, &tw).await;
 
     // restore terminal
     disable_raw_mode()?;
@@ -182,6 +182,7 @@ async fn run<B: Backend>(
     app: &mut App<'_>,
     tick_rate: Duration,
     config: RunConfig,
+    temp_worktree: &TempWorktree,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut last_tick = Instant::now();
 
@@ -426,8 +427,9 @@ async fn run<B: Backend>(
     terminal.draw(|f| ui(f, app))?;
     check_events(terminal, app, tick_rate, &mut last_tick)?;
 
-    // Skip manual cleanup when in temp worktree - TempWorktree::Drop handles it automatically
+    // Handle cleanup differently for temp worktree vs regular worktree
     if !is_in_temp_worktree() {
+        // Regular worktree cleanup
         git_checkout_branch(app, &original_branch)?;
         terminal.draw(|f| ui(f, app))?;
         check_events(terminal, app, tick_rate, &mut last_tick)?;
@@ -440,9 +442,28 @@ async fn run<B: Backend>(
         terminal.draw(|f| ui(f, app))?;
         check_events(terminal, app, tick_rate, &mut last_tick)?;
     } else {
+        // Temp worktree cleanup - update original worktree to PR branch
         app.add_log(
             "INFO",
-            "Skipping manual cleanup - temp worktree will handle it automatically",
+            "Preparing original worktree to switch to PR branch...",
+        );
+        terminal.draw(|f| ui(f, app))?;
+        check_events(terminal, app, tick_rate, &mut last_tick)?;
+
+        // We need to update the original worktree to be on the PR branch
+        // This must be done BEFORE the temp worktree is dropped
+        update_original_worktree_to_pr_branch(
+            app,
+            &current_branch,
+            &original_branch,
+            temp_worktree.original_root(),
+        )?;
+        terminal.draw(|f| ui(f, app))?;
+        check_events(terminal, app, tick_rate, &mut last_tick)?;
+
+        app.add_log(
+            "INFO",
+            "Original worktree will be switched to PR branch after cleanup",
         );
         terminal.draw(|f| ui(f, app))?;
         check_events(terminal, app, tick_rate, &mut last_tick)?;
