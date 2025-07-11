@@ -63,8 +63,8 @@ pub async fn gpt_generate_branch_name_and_commit_description(
         Examples of valid branch names: 'feat/worktree-update', 'fix-memory-leak', 'feature/add-validation', 'release/v1.0.0'
         Examples of INVALID branch names: 'feat(worktree): update', 'fix memory leak', 'feature: add validation', '.hidden', 'branch.', 'branch..name'
 
-        For a very small PR return 'commit_details' as null, otherwise politely in a well structured markdown format describe all major changes for the PR. The description should include the section 'What', 'Why', and 'Bigger Picture'. Leave a TODO for the sections where you do not have enough information to fill them in. Do not invent information if you cannot extrapolate it from the provided input.
-        If there is a breaking change, add the 'impact' section.
+        For a very small PR return 'commit_details' as null, otherwise politely in a well structured markdown format describe all major changes for the PR. The description should include the section 'Problem (Why?)', 'Solution (What?)', and 'Details (How?)'. Leave a TODO for the sections where you do not have enough information to fill them in. Do not invent information if you cannot extrapolate it from the provided input.
+        If there is a breaking change, add the 'Impact' section.
 
         If open GitHub issues are provided, analyze them and append a line to commit_details:
         1. If changes are related to issue #X, add 'Relates to #X'
