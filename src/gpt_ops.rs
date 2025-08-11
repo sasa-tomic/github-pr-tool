@@ -127,7 +127,7 @@ pub async fn gpt_generate_branch_name_and_commit_description(
             ..Default::default()
         },
     ];
-    let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "o4-mini".to_string());
+    let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-5-mini".to_string());
 
     let chat_request = ChatCompletion::builder(&model, messages.clone())
         .credentials(credentials.clone())
