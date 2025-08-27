@@ -48,49 +48,44 @@ pub async fn gpt_generate_branch_name_and_commit_description(
     const MAX_ISSUES_LEN: usize = 16 * 1024; // 16K characters limit for issues
     let credentials = Credentials::from_env();
     let mut system_message_content = String::from(
-        "You are a helpful assistant that helps to prepare GitHub Pull Requests.
-        You will provide output in JSON format with EXACTLY the following keys: 'branch_name', 'commit_title', and 'commit_details'.
+        r#"You prepare concise GitHub Pull Requests.
 
-        CRITICAL: The 'branch_name' field must be a valid git branch name containing only:
-        - Letters (a-z, A-Z)
-        - Numbers (0-9)
-        - Hyphens (-)
-        - Underscores (_)
-        - Up to 1 forward slash (/)
-        - Dots (.) but not at the beginning or end, and not consecutive
+OUTPUT
+Return JSON with EXACTLY these keys: "branch_name", "commit_title", "commit_details".
 
-        The branch name MUST NOT contain spaces, parentheses, colons, or any other special characters.
-        Examples of valid branch names: 'feat/worktree-update', 'fix-memory-leak', 'feature/add-validation', 'release/v1.0.0'
-        Examples of INVALID branch names: 'feat(worktree): update', 'fix memory leak', 'feature: add validation', '.hidden', 'branch.', 'branch..name'
+BRANCH NAME (strict)
+- Allowed: letters, digits, hyphen (-), underscore (_), dot (.), up to ONE forward slash (/).
+- Not allowed: spaces, parentheses, colons, other symbols.
+- No leading/trailing dot. No consecutive dots. Max one "/".
+Examples OK: feat/worktree-update, fix-memory-leak, release/v1.0.0
+Examples NO: feat(worktree): update, fix memory leak, .hidden, branch., branch..name
 
-        For a very small PR return 'commit_details' as null, otherwise politely in a MINIMAL and well structured markdown format describe all major changes for the PR. The description should include the section 'Problem (Why?)', 'Solution (What?)', and 'Details (How?)'. Do not force the sections to be present if you cannot extrapolate MEANINGFUL and VALUABLE section information from the provided input. Ensure only HIGHLY RELEVANT information for the reviewer is included. Leave a TODO for the sections where you do not have enough information to fill them in.
-        If there is a breaking change, add the 'Impact' section.
+COMMIT TITLE (Conventional Commits)
+- Format: <type>(<scope>)!?: <imperative summary>
+- Use "!" if breaking.
+- ≤ 72 chars. Action verbs. No fluff. Only claims supported by the diff.
 
-        If open GitHub issues are provided, analyze them and append a line to commit_details:
-        1. If changes are related to issue #X, add 'Relates to #X'
-        2. If changes completely address and close issue #X, add 'Closes #X'
-        3. Only reference truly relevant issues - don't force connections.
-        4. If no issues are relevant, do not append the above lines.
-        5. If more than 1 issue is relevant, referenced them as 'Relates to #X, #Y' or 'Closes #X, #Y'.
+COMMIT DETAILS (ultra-brief Markdown)
+- If the PR is truly tiny AND no issue refs: set "commit_details" to null.
+- Otherwise write ≤ 120 words total AND ≤ 8 lines. Prefer bullets. No code blocks.
+- Include ONLY sections that add clear value; omit empty ones. Order:
+  - Problem (Why?) — ≤ 1 bullet.
+  - Solution (What?) — 1-3 bullets.
+  - Impact — include ONLY if breaking; note migration in ≤ 1 bullet.
+  - Details (How?) — 0-3 non-obvious bullets; skip routine refactors.
+  - Meta — single line if needed: "updated tests accordingly" or "updated comments".
+- Do NOT restate obvious diffs. Do NOT claim perf/security/UX benefits unless explicit in the diff.
+- Focus on MAJOR change(s). Minor changes only if they are the main point.
 
-        Strictly follow the Conventional Commits specification for formatting the commit_title. Commit messages should include the scope and if needed '!' to draw attention to breaking change. For instance:
-        'feat(api)!: send an email to the customer when a product is shipped'
-        Please write in a HIGHLY CONCISE and professional style, prioritizing action-oriented verbs over longer descriptive phrases. For example:
-        Instead of \"introduces enhancements to functionality\" use \"extends functionality\".
-        Instead of \"makes modifications\" use \"updates\" .
-        Instead of \"provides support for\", use \"supports\".
-        Do not make statements that are not directly supported by the diff.
-        For instance, do not use word \"enhances\", unless mentioned in the diff.
-        Do not say \"this change will improve performance\" unless the diff clearly claims that.
-        TRY TO IDENTIFY the MAJOR CHANGE(s) of the PR and in the description focus only on the major changes. Do not mention the minor changes or details (such as refactoring or updating tests or documentation) unless they are the primary focus of the PR.
-        If there are multiple major changes, mention all of them.
-        OMIT details about the changes in comments or tests unless they are the primary focus of the PR.
-        If there are changes in comments or tests mention such changes with a single line such as \"updated tests accordingly\" or \"updated comments\".
+GITHUB ISSUES (append at end)
+- If relevant: add exactly one line: "Relates to #X[, #Y]" or "Closes #X[, #Y]".
+- Only when truly connected. If multiple, comma-separate numbers.
+- If the PR is tiny BUT has relevant issues, include ONLY this line (do not use null).
 
-        Ensure clarity by avoiding redundant or overly elaborate expressions. Always be concise and to the point.
-        Make sure that there is NO REDUNDANT or obvious information in the description. Ensure that every word in the description is necessary and adds value.
-        "
-            );
+STYLE
+- Crisp, professional, fun-but-sparing. No filler ("this PR", "in order to", etc.).
+"#,
+    );
 
     if let Some(what) = what_arg.clone() {
         system_message_content.push_str(&format!("\n\nUser provided 'what': {}", what));
