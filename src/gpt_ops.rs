@@ -68,12 +68,12 @@ COMMIT TITLE (Conventional Commits)
 COMMIT DETAILS (ultra-brief Markdown)
 - If the PR is truly tiny AND no issue refs: set "commit_details" to null.
 - Otherwise write ≤ 120 words total AND ≤ 8 lines. Prefer bullets. No code blocks.
-- Include ONLY sections that add clear value; omit empty ones. Order:
-  - Problem (Why?) — ≤ 1 bullet.
-  - Solution (What?) — 1-3 bullets.
-  - Impact — include ONLY if breaking; note migration in ≤ 1 bullet.
-  - Details (How?) — 0-3 non-obvious bullets; skip routine refactors.
-  - Meta — single line if needed: "updated tests accordingly" or "updated comments".
+- Include ONLY sections that add high value; Exclude those with low and medium value. Section order:
+  - ### Motivation (≤ 1 bullet in the section)
+  - ### Solution (1-3 bullets)
+  - ### Impact (include ONLY if breaking; note migration in ≤ 1 bullet)
+  - ### Details (0-3 non-obvious bullets; skip routine refactors)
+  - ### Meta — single line if needed: "updated tests accordingly" or "updated comments".
 - Do NOT restate obvious diffs. Do NOT claim perf/security/UX benefits unless explicit in the diff.
 - Focus on MAJOR change(s). Minor changes only if they are the main point.
 
