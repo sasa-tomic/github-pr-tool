@@ -122,7 +122,7 @@ STYLE
             ..Default::default()
         },
     ];
-    let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-5-mini".to_string());
+    let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-5-nano".to_string());
 
     let chat_request = ChatCompletion::builder(&model, messages.clone())
         .credentials(credentials.clone())
