@@ -122,16 +122,51 @@ STYLE
             ..Default::default()
         },
     ];
-    let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-5-nano".to_string());
+    let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-5-mini".to_string());
 
     let chat_request = ChatCompletion::builder(&model, messages.clone())
         .credentials(credentials.clone())
         .create()
         .await?;
-    let chat_response = chat_request
+    
+    let first_choice = chat_request
         .choices
         .first()
-        .unwrap()
+        .ok_or_else(|| {
+            // Get base URL and API key for debugging
+            let base_url = std::env::var("OPENAI_BASE_URL")
+                .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+            let api_key = std::env::var("OPENAI_KEY")
+                .or_else(|_| std::env::var("OPENAI_API_KEY"))
+                .unwrap_or_else(|_| "not set".to_string());
+            
+            // Show first 8 characters of the token for debugging (safe to show)
+            let token_preview = if api_key != "not set" && api_key.len() >= 8 {
+                format!("{}...", &api_key[..8])
+            } else {
+                api_key.clone()
+            };
+            
+            let error_msg = format!(
+                "OpenAI API returned no choices. This may indicate:\n\
+                - Invalid model name: '{}'\n\
+                - Invalid base URL configuration\n\
+                - API authentication error\n\
+                - API rate limit or service error\n\
+                \n\
+                Debug info:\n\
+                - Base URL: {}\n\
+                - API Key: {}\n\
+                \n\
+                Check your OPENAI_MODEL, OPENAI_BASE_URL, and OPENAI_KEY environment variables.",
+                model, base_url, token_preview
+            );
+            app.add_error(error_msg.clone());
+            app.switch_to_tab(1);
+            Box::<dyn std::error::Error>::from(std::io::Error::new(std::io::ErrorKind::Other, error_msg))
+        })?;
+    
+    let chat_response = first_choice
         .message
         .content
         .clone()
