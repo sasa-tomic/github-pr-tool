@@ -3,6 +3,40 @@ use openai::{
     chat::{ChatCompletion, ChatCompletionMessage, ChatCompletionMessageRole},
     Credentials,
 };
+use std::time::Duration;
+
+/// Retries an async operation up to MAX_RETRIES times with exponential backoff.
+/// Initial delay: 1s, then 2s, then 4s (for 3 total attempts).
+async fn retry_with_backoff<F, T, E>(mut operation: F) -> Result<T, E>
+where
+    F: FnMut() -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<T, E>> + Send>>,
+    E: std::fmt::Display,
+{
+    const MAX_RETRIES: u32 = 3;
+    const INITIAL_DELAY_MS: u64 = 1000;
+
+    for attempt in 1..=MAX_RETRIES {
+        match operation().await {
+            Ok(result) => return Ok(result),
+            Err(err) => {
+                if attempt == MAX_RETRIES {
+                    // Exhausted all retries, fail
+                    return Err(err);
+                }
+                
+                // Calculate exponential backoff: 1s, 2s, 4s
+                let delay_ms = INITIAL_DELAY_MS * 2u64.pow(attempt - 1);
+                eprintln!(
+                    "GPT API call attempt {}/{} failed: {}. Retrying in {}ms...",
+                    attempt, MAX_RETRIES, err, delay_ms
+                );
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            }
+        }
+    }
+    
+    unreachable!("Loop should have returned or exhausted retries")
+}
 
 /// Validates if a string is a valid git branch name
 ///
@@ -124,10 +158,19 @@ STYLE
     ];
     let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-5-mini".to_string());
 
-    let chat_request = ChatCompletion::builder(&model, messages.clone())
-        .credentials(credentials.clone())
-        .create()
-        .await?;
+    // Retry the API call with exponential backoff
+    let chat_request = retry_with_backoff(|| {
+        let model = model.clone();
+        let messages = messages.clone();
+        let credentials = credentials.clone();
+        Box::pin(async move {
+            ChatCompletion::builder(&model, messages)
+                .credentials(credentials)
+                .create()
+                .await
+        })
+    })
+    .await?;
     
     let first_choice = chat_request
         .choices
