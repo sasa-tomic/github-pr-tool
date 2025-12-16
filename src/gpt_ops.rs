@@ -23,7 +23,7 @@ where
                     // Exhausted all retries, fail
                     return Err(err);
                 }
-                
+
                 // Calculate exponential backoff: 1s, 2s, 4s
                 let delay_ms = INITIAL_DELAY_MS * 2u64.pow(attempt - 1);
                 eprintln!(
@@ -34,8 +34,81 @@ where
             }
         }
     }
-    
+
     unreachable!("Loop should have returned or exhausted retries")
+}
+
+/// Attempts to repair common GPT JSON mistakes
+///
+/// Common issues:
+/// - Trailing commas before closing braces/brackets
+/// - Bare strings in objects (missing key)
+fn try_repair_json(json: &str) -> Option<String> {
+    let mut repaired = String::with_capacity(json.len() + 50);
+    let mut chars = json.chars().peekable();
+    let mut in_string = false;
+    let mut prev_non_ws = ' ';
+
+    while let Some(c) = chars.next() {
+        if c == '"' && prev_non_ws != '\\' {
+            in_string = !in_string;
+        }
+
+        if !in_string {
+            // Remove trailing commas before } or ]
+            if c == ',' {
+                // Look ahead to see if next non-whitespace is } or ]
+                let rest: String = chars.clone().collect();
+                let trimmed = rest.trim_start();
+                if trimmed.starts_with('}') || trimmed.starts_with(']') {
+                    // Skip this comma
+                    continue;
+                }
+            }
+            if !c.is_whitespace() {
+                prev_non_ws = c;
+            }
+        }
+
+        repaired.push(c);
+    }
+
+    // Try parsing the repaired JSON
+    if serde_json::from_str::<serde_json::Value>(&repaired).is_ok() {
+        return Some(repaired);
+    }
+
+    // More aggressive repair: try to fix bare strings in objects
+    // Pattern: look for ,"string"} and convert to ,"Note":"string"}
+    let mut aggressive = repaired.clone();
+
+    // Find patterns like ,"..." followed eventually by } without a : in between
+    // This is a heuristic that handles the specific GPT error we've seen
+    // Handle both with and without whitespace: `,"Closes` or `, "Closes`
+    let prefixes = ["Closes", "Relates to", "See", "Fixes", "Related to"];
+
+    for prefix in prefixes {
+        // Pattern: , "Prefix ..." } (with possible whitespace)
+        let patterns = [
+            (
+                format!(r#", "{}"#, prefix),
+                format!(r#", "Note": "{}"#, prefix),
+            ),
+            (
+                format!(r#","{}"#, prefix),
+                format!(r#","Note": "{}"#, prefix),
+            ),
+        ];
+        for (from, to) in patterns {
+            aggressive = aggressive.replace(&from, &to);
+        }
+    }
+
+    if serde_json::from_str::<serde_json::Value>(&aggressive).is_ok() {
+        return Some(aggressive);
+    }
+
+    None
 }
 
 /// Validates if a string is a valid git branch name
@@ -85,7 +158,8 @@ pub async fn gpt_generate_branch_name_and_commit_description(
         r#"You prepare concise GitHub Pull Requests.
 
 OUTPUT
-Return JSON with EXACTLY these keys: "branch_name", "commit_title", "commit_details".
+Return valid JSON with EXACTLY these keys: "branch_name", "commit_title", "commit_details".
+IMPORTANT: All values must be strings (or null for commit_details). Do NOT use nested objects or arrays.
 
 BRANCH NAME (strict)
 - Allowed: letters, digits, hyphen (-), underscore (_), dot (.), up to ONE forward slash (/).
@@ -99,7 +173,8 @@ COMMIT TITLE (Conventional Commits)
 - Use "!" if breaking.
 - ≤ 72 chars. Action verbs. No fluff. Only claims supported by the diff.
 
-COMMIT DETAILS (ultra-brief Markdown)
+COMMIT DETAILS (a single Markdown string, NOT a nested object)
+- Value must be a single string containing Markdown, or null. Never an object or array.
 - If the PR is truly tiny AND no issue refs: set "commit_details" to null.
 - Otherwise write ≤ 120 words total AND ≤ 8 lines. Prefer bullets. No code blocks.
 - Include ONLY sections that add high value; Exclude those with low and medium value. Section order:
@@ -171,27 +246,24 @@ STYLE
         })
     })
     .await?;
-    
-    let first_choice = chat_request
-        .choices
-        .first()
-        .ok_or_else(|| {
-            // Get base URL and API key for debugging
-            let base_url = std::env::var("OPENAI_BASE_URL")
-                .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
-            let api_key = std::env::var("OPENAI_KEY")
-                .or_else(|_| std::env::var("OPENAI_API_KEY"))
-                .unwrap_or_else(|_| "not set".to_string());
-            
-            // Show first 8 characters of the token for debugging (safe to show)
-            let token_preview = if api_key != "not set" && api_key.len() >= 8 {
-                format!("{}...", &api_key[..8])
-            } else {
-                api_key.clone()
-            };
-            
-            let error_msg = format!(
-                "OpenAI API returned no choices. This may indicate:\n\
+
+    let first_choice = chat_request.choices.first().ok_or_else(|| {
+        // Get base URL and API key for debugging
+        let base_url = std::env::var("OPENAI_BASE_URL")
+            .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+        let api_key = std::env::var("OPENAI_KEY")
+            .or_else(|_| std::env::var("OPENAI_API_KEY"))
+            .unwrap_or_else(|_| "not set".to_string());
+
+        // Show first 8 characters of the token for debugging (safe to show)
+        let token_preview = if api_key != "not set" && api_key.len() >= 8 {
+            format!("{}...", &api_key[..8])
+        } else {
+            api_key.clone()
+        };
+
+        let error_msg = format!(
+            "OpenAI API returned no choices. This may indicate:\n\
                 - Invalid model name: '{}'\n\
                 - Invalid base URL configuration\n\
                 - API authentication error\n\
@@ -202,18 +274,17 @@ STYLE
                 - API Key: {}\n\
                 \n\
                 Check your OPENAI_MODEL, OPENAI_BASE_URL, and OPENAI_KEY environment variables.",
-                model, base_url, token_preview
-            );
-            app.add_error(error_msg.clone());
-            app.switch_to_tab(1);
-            Box::<dyn std::error::Error>::from(std::io::Error::new(std::io::ErrorKind::Other, error_msg))
-        })?;
-    
-    let chat_response = first_choice
-        .message
-        .content
-        .clone()
-        .unwrap_or_default();
+            model, base_url, token_preview
+        );
+        app.add_error(error_msg.clone());
+        app.switch_to_tab(1);
+        Box::<dyn std::error::Error>::from(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            error_msg,
+        ))
+    })?;
+
+    let chat_response = first_choice.message.content.clone().unwrap_or_default();
 
     let chat_response = chat_response
         .trim()
@@ -223,13 +294,39 @@ STYLE
         .to_string();
 
     app.add_log("INFO", format!("chat_response: {}", chat_response));
-    // Parse the JSON response
+    // Parse the JSON response, attempting repair if needed
     let parsed_response: serde_json::Value = match serde_json::from_str(&chat_response) {
         Ok(value) => value,
         Err(err) => {
-            app.add_error(err.to_string());
-            app.switch_to_tab(1);
-            return Err(err.into());
+            // Try to repair common GPT JSON mistakes
+            app.add_log(
+                "WARN",
+                format!("JSON parse failed: {}, attempting repair", err),
+            );
+            match try_repair_json(&chat_response) {
+                Some(repaired) => {
+                    app.add_log("INFO", "JSON repair succeeded");
+                    match serde_json::from_str(&repaired) {
+                        Ok(value) => value,
+                        Err(err2) => {
+                            app.add_error(format!(
+                                "JSON repair failed: {}\nResponse was:\n{}",
+                                err2, chat_response
+                            ));
+                            app.switch_to_tab(1);
+                            return Err(err2.into());
+                        }
+                    }
+                }
+                None => {
+                    app.add_error(format!(
+                        "JSON parse error: {}\nResponse was:\n{}",
+                        err, chat_response
+                    ));
+                    app.switch_to_tab(1);
+                    return Err(err.into());
+                }
+            }
         }
     };
     let branch_name = parsed_response["branch_name"]
@@ -240,9 +337,42 @@ STYLE
         .as_str()
         .unwrap_or("Generic commit title")
         .to_string();
-    let commit_details = parsed_response["commit_details"]
-        .as_str()
-        .map(|s| s.to_string());
+    // Handle commit_details - can be string, null, or (incorrectly) an object
+    let commit_details = match &parsed_response["commit_details"] {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Null => None,
+        serde_json::Value::Object(obj) => {
+            // GPT sometimes returns structured data; convert to Markdown string
+            let mut md = String::new();
+            for (key, value) in obj {
+                if key.starts_with("###") || key.starts_with("##") || key.starts_with('#') {
+                    md.push_str(&format!("{}\n", key));
+                } else {
+                    md.push_str(&format!("### {}\n", key));
+                }
+                match value {
+                    serde_json::Value::Array(items) => {
+                        for item in items {
+                            if let Some(s) = item.as_str() {
+                                md.push_str(&format!("- {}\n", s));
+                            }
+                        }
+                    }
+                    serde_json::Value::String(s) => {
+                        md.push_str(&format!("{}\n", s));
+                    }
+                    _ => {}
+                }
+                md.push('\n');
+            }
+            if md.is_empty() {
+                None
+            } else {
+                Some(md.trim().to_string())
+            }
+        }
+        _ => None,
+    };
 
     // Validate the branch name
     if !is_valid_git_branch_name(&branch_name) {

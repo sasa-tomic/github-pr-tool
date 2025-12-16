@@ -237,3 +237,108 @@ fn test_invalid_git_branch_names() {
     assert!(!is_valid_git_branch_name("branch+name"));
     assert!(!is_valid_git_branch_name("branch=name"));
 }
+
+#[test]
+fn test_json_repair_trailing_comma() {
+    // Test repair of trailing comma before }
+    let invalid_json = r#"{"key": "value",}"#;
+    let repaired = try_repair_json(invalid_json);
+    assert!(repaired.is_some());
+    let parsed: serde_json::Value = serde_json::from_str(&repaired.unwrap()).unwrap();
+    assert_eq!(parsed["key"].as_str().unwrap(), "value");
+}
+
+#[test]
+fn test_json_repair_trailing_comma_in_array() {
+    // Test repair of trailing comma before ]
+    let invalid_json = r#"{"items": ["a", "b",]}"#;
+    let repaired = try_repair_json(invalid_json);
+    assert!(repaired.is_some());
+    let parsed: serde_json::Value = serde_json::from_str(&repaired.unwrap()).unwrap();
+    assert_eq!(parsed["items"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn test_json_repair_bare_string_closes() {
+    // Test repair of bare "Closes #..." string in object
+    // Pattern: , "Closes ..." (with space after comma)
+    let invalid_json = r#"{"section": ["item"], "Closes #123"}"#;
+    let repaired = try_repair_json(invalid_json);
+    assert!(repaired.is_some(), "Failed to repair: {}", invalid_json);
+    let parsed: serde_json::Value = serde_json::from_str(&repaired.unwrap()).unwrap();
+    assert!(parsed["Note"].as_str().unwrap().contains("Closes #123"));
+
+    // Also test without space after comma
+    let invalid_json2 = r#"{"section": ["item"],"Closes #456"}"#;
+    let repaired2 = try_repair_json(invalid_json2);
+    assert!(repaired2.is_some(), "Failed to repair: {}", invalid_json2);
+    let parsed2: serde_json::Value = serde_json::from_str(&repaired2.unwrap()).unwrap();
+    assert!(parsed2["Note"].as_str().unwrap().contains("Closes #456"));
+}
+
+#[test]
+fn test_json_repair_valid_json_unchanged() {
+    // Valid JSON should pass through without issues
+    let valid_json = r#"{"branch_name": "test", "commit_title": "fix: test"}"#;
+    let repaired = try_repair_json(valid_json);
+    assert!(repaired.is_some());
+    assert_eq!(repaired.unwrap().trim(), valid_json.trim());
+}
+
+#[test]
+fn test_commit_details_as_object_conversion() {
+    // Test that commit_details as object gets converted to string
+    let json_with_object_details = json!({
+        "branch_name": "feat/test",
+        "commit_title": "feat: test",
+        "commit_details": {
+            "### Motivation": ["Reason for change"],
+            "### Solution": ["What was done", "Additional detail"]
+        }
+    });
+
+    let parsed = json_with_object_details;
+
+    // Simulate the conversion logic from gpt_ops.rs
+    let commit_details = match &parsed["commit_details"] {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Null => None,
+        serde_json::Value::Object(obj) => {
+            let mut md = String::new();
+            for (key, value) in obj {
+                if key.starts_with("###") || key.starts_with("##") || key.starts_with('#') {
+                    md.push_str(&format!("{}\n", key));
+                } else {
+                    md.push_str(&format!("### {}\n", key));
+                }
+                match value {
+                    serde_json::Value::Array(items) => {
+                        for item in items {
+                            if let Some(s) = item.as_str() {
+                                md.push_str(&format!("- {}\n", s));
+                            }
+                        }
+                    }
+                    serde_json::Value::String(s) => {
+                        md.push_str(&format!("{}\n", s));
+                    }
+                    _ => {}
+                }
+                md.push('\n');
+            }
+            if md.is_empty() {
+                None
+            } else {
+                Some(md.trim().to_string())
+            }
+        }
+        _ => None,
+    };
+
+    assert!(commit_details.is_some());
+    let details = commit_details.unwrap();
+    assert!(details.contains("### Motivation"));
+    assert!(details.contains("- Reason for change"));
+    assert!(details.contains("### Solution"));
+    assert!(details.contains("- What was done"));
+}
