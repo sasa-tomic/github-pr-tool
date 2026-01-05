@@ -278,10 +278,7 @@ STYLE
         );
         app.add_error(error_msg.clone());
         app.switch_to_tab(1);
-        Box::<dyn std::error::Error>::from(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            error_msg,
-        ))
+        std::io::Error::other(error_msg)
     })?;
 
     let chat_response = first_choice.message.content.clone().unwrap_or_default();
