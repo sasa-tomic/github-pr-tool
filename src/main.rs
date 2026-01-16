@@ -301,6 +301,10 @@ async fn run<B: Backend>(
     terminal.draw(|f| ui(f, app))?;
     check_events(terminal, app, tick_rate, &mut last_tick)?;
 
+    // Track whether we created a fresh branch from uncommitted changes.
+    // If so, we can reuse the GPT response for PR instead of calling again.
+    let mut cached_gpt_response: Option<(String, Option<String>)> = None;
+
     if diff_uncommitted.is_empty() {
         if is_current_branch_main {
             app.add_log("INFO", "No changes to commit.");
@@ -339,14 +343,17 @@ async fn run<B: Backend>(
         terminal.draw(|f| ui(f, app))?;
         check_events(terminal, app, tick_rate, &mut last_tick)?;
 
-        if is_current_branch_main || !config.update_pr {
-            // Always create a new branch if a) on main or b) not asked to update an existing PR
+        let created_fresh_branch = is_current_branch_main || !config.update_pr;
+        if created_fresh_branch {
+            // Creating a new branch - cache the GPT response to reuse for PR
+            // since the branch diff will be essentially the same as uncommitted diff
             git_checkout_new_branch(app, &generated_branch_name, &current_branch, false)?;
             app.add_log(
                 "INFO",
                 format!("Created new branch: {generated_branch_name}"),
             );
             current_branch = generated_branch_name;
+            cached_gpt_response = Some((commit_title.clone(), commit_details.clone()));
             terminal.draw(|f| ui(f, app))?;
         }
 
@@ -379,34 +386,38 @@ async fn run<B: Backend>(
         return Ok(());
     }
 
-    app.add_log("INFO", "Generating PR details using AI...");
-    app.update_progress(0.5);
-    terminal.draw(|f| ui(f, app))?;
-    check_events(terminal, app, tick_rate, &mut last_tick)?;
+    // Reuse cached GPT response if we just created a fresh branch,
+    // otherwise call GPT with the full branch diff (for existing branches with history)
+    let (pr_title, pr_body) = if let Some((title, details)) = cached_gpt_response {
+        app.add_log("INFO", "Reusing GPT response for PR (fresh branch)...");
+        app.update_progress(0.5);
+        terminal.draw(|f| ui(f, app))?;
+        check_events(terminal, app, tick_rate, &mut last_tick)?;
+        (title, details)
+    } else {
+        app.add_log("INFO", "Generating PR details using AI...");
+        app.update_progress(0.5);
+        terminal.draw(|f| ui(f, app))?;
+        check_events(terminal, app, tick_rate, &mut last_tick)?;
 
-    app.add_log("INFO", "Fetching GitHub issues...");
-    terminal.draw(|f| ui(f, app))?;
-    check_events(terminal, app, tick_rate, &mut last_tick)?;
+        let issues_json = github_list_issues(app)?;
 
-    let issues_json = github_list_issues(app)?;
-
-    let (_, commit_title, commit_details) = gpt_generate_branch_name_and_commit_description(
-        app,
-        diff_between_branches,
-        Some(issues_json),
-        config.what,
-        config.why,
-        config.bigger_picture,
-    )
-    .await?;
+        let (_, title, details) = gpt_generate_branch_name_and_commit_description(
+            app,
+            diff_between_branches,
+            Some(issues_json),
+            config.what,
+            config.why,
+            config.bigger_picture,
+        )
+        .await?;
+        (title, details)
+    };
     check_events(terminal, app, tick_rate, &mut last_tick)?;
-    app.add_log("INFO", format!("Commit title: {commit_title}"));
+    app.add_log("INFO", format!("PR title: {pr_title}"));
     app.add_log(
         "INFO",
-        format!(
-            "Commit details: {}",
-            commit_details.clone().unwrap_or_default()
-        ),
+        format!("PR body: {}", pr_body.clone().unwrap_or_default()),
     );
     terminal.draw(|f| ui(f, app))?;
 
@@ -415,7 +426,6 @@ async fn run<B: Backend>(
     terminal.draw(|f| ui(f, app))?;
     check_events(terminal, app, tick_rate, &mut last_tick)?;
 
-    app.add_log("INFO", format!("Commit title: {commit_title}"));
     app.add_log("INFO", "Creating pull request...");
     app.update_progress(0.8);
     terminal.draw(|f| ui(f, app))?;
@@ -428,8 +438,8 @@ async fn run<B: Backend>(
     }
     match create_or_update_pull_request(
         app,
-        &commit_title,
-        &commit_details.unwrap_or_default(),
+        &pr_title,
+        &pr_body.unwrap_or_default(),
         config.update_pr,
         config.ready,
         &current_branch_merge_base,
