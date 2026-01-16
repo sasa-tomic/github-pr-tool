@@ -455,7 +455,7 @@ fn test_update_original_worktree_to_pr_branch() {
     let mut app = App::new("Test App");
     let original_root = std::path::PathBuf::from(&repo_path);
 
-    let result = update_original_worktree_to_pr_branch(&mut app, pr_branch, "main", &original_root);
+    let result = update_original_worktree_to_pr_branch(&mut app, pr_branch, &original_root);
 
     // Verify the function succeeded
     if let Err(e) = &result {
@@ -471,19 +471,7 @@ fn test_update_original_worktree_to_pr_branch() {
 
     // Verify that the logs show the correct operations
     assert!(app.logs.iter().any(|(level, msg)| {
-        *level == "INFO"
-            && msg.contains(&format!(
-                "Checking if PR branch '{}' exists locally",
-                pr_branch
-            ))
-    }));
-
-    assert!(app.logs.iter().any(|(level, msg)| {
-        *level == "SUCCESS"
-            && msg.contains(&format!(
-                "Original worktree updated to PR branch '{}'",
-                pr_branch
-            ))
+        *level == "SUCCESS" && msg.contains(&format!("Switched to branch '{}'", pr_branch))
     }));
 
     // Verify that the original worktree is now on the PR branch
@@ -680,7 +668,7 @@ fn test_update_original_worktree_to_pr_branch_with_remote_tracking() {
     let mut app = App::new("Test App");
     let original_root = std::path::PathBuf::from(&repo_path);
 
-    let result = update_original_worktree_to_pr_branch(&mut app, pr_branch, "main", &original_root);
+    let result = update_original_worktree_to_pr_branch(&mut app, pr_branch, &original_root);
 
     // Verify the function succeeded
     if let Err(e) = &result {

@@ -3,11 +3,8 @@ use ratatui::style::Color;
 use ratatui::{backend::Backend, Terminal};
 use std::collections::HashMap;
 use std::error::Error;
-use std::path::PathBuf;
 use std::process::Command;
 
-const AUTOCOMMIT_BRANCH_NAME: &str = "gh-autopr-index-autocommit";
-const AUTOSTASH_NAME: &str = "gh-autopr-index-autostash";
 const MAX_DIFF_BYTES: usize = 200 * 1024; // 200 KiB
 
 pub fn git_ensure_in_repo(app: &mut App) -> Result<(), Box<dyn Error>> {
@@ -116,92 +113,15 @@ pub fn truncate_utf8(s: &str, max_bytes: usize) -> String {
     s[..end].to_owned()
 }
 
-/// Try to find the parent branch from git's reflog using `@{-1}` syntax.
-/// Returns the parent branch name or the fallback if not found.
-fn try_find_git_parent_branch(
-    app: &mut App,
-    current_branch: &str,
-    fallback: &str,
-    log_on_success: bool,
-) -> Result<String, Box<dyn Error>> {
-    let output = Command::new("git")
-        .args([
-            "rev-parse",
-            "--abbrev-ref",
-            &format!("{}@{{-1}}", current_branch),
-        ])
-        .output()?;
-
-    if output.status.success() {
-        let parent = String::from_utf8(output.stdout)?
-            .trim()
-            .trim_start_matches("origin/")
-            .to_string();
-        if !parent.is_empty() {
-            if log_on_success {
-                app.add_log("INFO", format!("Using parent branch {} for diff", parent));
-            }
-            return Ok(parent);
-        }
-    }
-    Ok(fallback.to_owned())
-}
-
-/// Determines the base branch for comparing changes and generating diffs.
-///
-/// For an existing PR: Uses the PR's base branch
-/// For a new branch: Uses the parent branch this branch was created from
-/// Fallback: Uses the repository's main branch
+/// Get diff between the current branch and its parent/base branch.
 pub fn git_diff_between_branches(
     app: &mut App,
-    parent_branch: &str,
-    current_branch: &String,
+    base_branch: &str,
+    current_branch: &str,
 ) -> Result<String, Box<dyn Error>> {
-    // First try to get base branch from existing PR
-    let base_branch_output = Command::new("gh")
-        .args([
-            "pr",
-            "list",
-            "--state",
-            "open",
-            "--head",
-            current_branch,
-            "--json",
-            "baseRefName",
-        ])
-        .output()?;
-
-    let base_branch = if base_branch_output.status.success() {
-        let json_str = String::from_utf8(base_branch_output.stdout)?;
-        if !json_str.trim().is_empty() && json_str != "[]" {
-            // Try to extract base branch from PR JSON
-            if let Some(base) = json_str
-                .lines()
-                .next()
-                .and_then(|line| serde_json::from_str::<Vec<serde_json::Value>>(line).ok())
-                .and_then(|prs| prs.first().cloned())
-                .and_then(|pr| pr["baseRefName"].as_str().map(|s| s.to_string()))
-            {
-                app.add_log(
-                    "INFO",
-                    format!("Using existing PR base branch {} for diff", base),
-                );
-                base
-            } else {
-                // No PR base found, try git reflog
-                try_find_git_parent_branch(app, current_branch, parent_branch, true)?
-            }
-        } else {
-            // No PR exists, try git reflog
-            try_find_git_parent_branch(app, current_branch, parent_branch, true)?
-        }
-    } else {
-        parent_branch.to_owned()
-    };
-
     app.add_log(
         "INFO",
-        format!("Comparing against base branch: {}", base_branch),
+        format!("Comparing {} against base branch: {}", current_branch, base_branch),
     );
 
     let output = Command::new("git")
@@ -391,234 +311,26 @@ fn commit_distance(from: &str, to: &str) -> Result<usize, Box<dyn Error>> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().parse()?)
 }
 
-/// Helper function to apply a patch with directory creation support
-fn apply_patch_with_directory_creation(
-    app: &mut App,
-    patch_file: &std::path::PathBuf,
-    is_staged: bool,
-) -> Result<(), Box<dyn Error>> {
-    let patch_path = patch_file.to_str().unwrap();
-    let change_type = if is_staged { "staged" } else { "unstaged" };
-
-    // Build git apply command args
-    let mut apply_args = vec!["apply"];
-    if is_staged {
-        apply_args.push("--cached");
-    }
-    apply_args.extend(["--3way", "--verbose", patch_path]);
-
-    // First try applying with 3-way merge
-    let output = Command::new("git").args(&apply_args).output()?;
-
-    if !output.status.success() {
-        // If 3-way merge fails, try creating directories first
-        app.add_log(
-            "INFO",
-            format!(
-                "3-way merge failed for {} changes, trying to create directories first",
-                change_type
-            ),
-        );
-
-        // Extract directory paths from the patch
-        let patch_content = fs_err::read_to_string(patch_file)?;
-        let mut dirs_to_create = std::collections::HashSet::new();
-
-        for line in patch_content.lines() {
-            if line.starts_with("+++") || line.starts_with("---") {
-                if let Some(path) = line.split_whitespace().nth(1) {
-                    let path = path.trim_start_matches("b/");
-                    if path != "/dev/null" && !path.is_empty() {
-                        if let Some(parent) = std::path::Path::new(path).parent() {
-                            if !parent.as_os_str().is_empty() {
-                                dirs_to_create.insert(parent.to_path_buf());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Create directories
-        for dir in dirs_to_create {
-            if let Err(e) = fs_err::create_dir_all(&dir) {
-                app.add_log(
-                    "WARN",
-                    format!("Failed to create directory {}: {}", dir.display(), e),
-                );
-            } else {
-                app.add_log("INFO", format!("Created directory: {}", dir.display()));
-            }
-        }
-
-        // Try applying again
-        let retry_output = Command::new("git").args(&apply_args).output()?;
-
-        if !retry_output.status.success() {
-            app.add_log(
-                "WARN",
-                format!(
-                    "Failed to reapply {} changes after pull - some changes may be lost",
-                    change_type
-                ),
-            );
-            app.add_log(
-                "INFO",
-                format!(
-                    "{} patch available at: {}",
-                    change_type,
-                    patch_file.display()
-                ),
-            );
-            let manual_cmd = if is_staged {
-                "git apply --cached --3way <patch-file>"
-            } else {
-                "git apply --3way <patch-file>"
-            };
-            app.add_log("INFO", format!("To manually apply: {}", manual_cmd));
-            app.add_log(
-                "ERROR",
-                format!(
-                    "Git apply error: {}",
-                    String::from_utf8_lossy(&retry_output.stderr)
-                ),
-            );
-        } else {
-            app.add_log(
-                "INFO",
-                format!(
-                    "Successfully reapplied {} changes after creating directories",
-                    change_type
-                ),
-            );
-        }
-    } else {
-        app.add_log(
-            "INFO",
-            format!("Successfully reapplied {} changes", change_type),
-        );
-    }
-
-    Ok(())
-}
-
+/// Fetch/pull latest changes from origin.
+/// When on main branch: just fetch (don't pull - we'll work in temp worktree).
+/// When on feature branch: fetch the main branch for comparison.
 pub fn git_fetch_main(
     app: &mut App,
-    current_branch: &String,
-    main_branch: &String,
+    current_branch: &str,
+    main_branch: &str,
 ) -> Result<(), Box<dyn Error>> {
     if current_branch == main_branch {
-        let had_staged_changes = git_has_staged_changes()?;
-        if had_staged_changes {
-            app.add_log(
-                "INFO",
-                "Staged changes detected, creating patches to preserve them",
-            );
-
-            // Create patch for staged changes
-            let staged_patch = Command::new("git")
-                .args(["diff", "--staged", "--binary"])
-                .output()?;
-
-            // Get unstaged patch only if there are actual unstaged changes
-            let unstaged_patch = get_unstaged_patch_if_exists()?;
-
-            // Create directory for patches in .git/
-            let git_dir = PathBuf::from(
-                String::from_utf8(
-                    Command::new("git")
-                        .args(["rev-parse", "--git-dir"])
-                        .output()?
-                        .stdout,
-                )?
-                .trim(),
-            );
-            let patches_dir = git_dir.join("gh-autopr-patches");
-            fs_err::create_dir_all(&patches_dir)?;
-
-            // Generate timestamp for unique patch filenames
-            let timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)?
-                .as_secs();
-
-            let mut staged_patch_file = None;
-            let mut unstaged_patch_file = None;
-
-            // Save staged patch to file
-            if !staged_patch.stdout.is_empty() {
-                let patch_file = patches_dir.join(format!("staged-{}.patch", timestamp));
-                fs_err::write(&patch_file, &staged_patch.stdout)?;
-                staged_patch_file = Some(patch_file.clone());
-                app.add_log(
-                    "INFO",
-                    format!("Saved staged changes patch to: {}", patch_file.display()),
-                );
-            }
-
-            // Save unstaged patch to file
-            if !unstaged_patch.is_empty() {
-                let patch_file = patches_dir.join(format!("unstaged-{}.patch", timestamp));
-                fs_err::write(&patch_file, &unstaged_patch)?;
-                unstaged_patch_file = Some(patch_file.clone());
-                app.add_log(
-                    "INFO",
-                    format!("Saved unstaged changes patch to: {}", patch_file.display()),
-                );
-            }
-
-            // Reset all changes to clean working tree for pull
-            Command::new("git")
-                .args(["reset", "--hard", "HEAD"])
-                .output()?;
-
-            // Pull latest changes
-            let output = Command::new("git").args(["pull", "origin"]).output()?;
-            if !output.status.success() {
-                let err = String::from_utf8_lossy(&output.stderr).to_string();
-                app.add_error(err.clone());
-                return Err(format!("Failed to pull from origin: {}", err).into());
-            }
-            app.add_log("INFO", "Pulled latest changes from origin");
-
-            // Reapply staged changes
-            if let Some(ref patch_file) = staged_patch_file {
-                apply_patch_with_directory_creation(app, patch_file, true)?;
-            }
-
-            // Reapply unstaged changes
-            if let Some(ref patch_file) = unstaged_patch_file {
-                apply_patch_with_directory_creation(app, patch_file, false)?;
-            }
-
-            // Provide user guidance on patch files
-            if staged_patch_file.is_some() || unstaged_patch_file.is_some() {
-                app.add_log(
-                    "INFO",
-                    format!("Patch files stored in: {}", patches_dir.display()),
-                );
-                app.add_log(
-                    "INFO",
-                    "You can inspect these patches or apply them manually if needed",
-                );
-            }
-
-            return Ok(()); // Early return since we already handled the pull
-        }
-        // Only reach here if no staged changes were detected
-        let output = Command::new("git").args(["pull", "origin"]).output()?;
+        // Just fetch, don't pull - temp worktree handles dirty state
+        let output = Command::new("git").args(["fetch", "origin"]).output()?;
         if !output.status.success() {
             let err = String::from_utf8_lossy(&output.stderr).to_string();
             app.add_error(err.clone());
-            return Err(format!("Failed to pull from origin: {}", err).into());
+            return Err(format!("Failed to fetch from origin: {}", err).into());
         }
-        app.add_log("INFO", "Pulled latest changes from origin");
+        app.add_log("INFO", "Fetched latest changes from origin");
     } else {
         let output = Command::new("git")
-            .args([
-                "fetch",
-                "origin",
-                format!("{}:{}", main_branch, main_branch).as_str(),
-            ])
+            .args(["fetch", "origin", &format!("{}:{}", main_branch, main_branch)])
             .output()?;
         if !output.status.success() {
             let err = String::from_utf8_lossy(&output.stderr).to_string();
@@ -629,21 +341,6 @@ pub fn git_fetch_main(
     }
 
     Ok(())
-}
-
-pub fn git_checkout_branch(app: &mut App, branch_name: &str) -> Result<String, Box<dyn Error>> {
-    let output = Command::new("git")
-        .args(["checkout", branch_name])
-        .output()?;
-
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr).to_string();
-        app.add_error(err.clone());
-        return Err(format!("Failed to checkout branch: {}", err).into());
-    }
-
-    app.add_log("INFO", format!("Checked out branch: {}", branch_name));
-    Ok(String::from_utf8_lossy(output.stdout.as_slice()).to_string())
 }
 
 pub fn git_checkout_new_branch(
@@ -709,86 +406,12 @@ pub fn git_commit_staged_changes(
     Ok(())
 }
 
-pub fn git_pull_branch(app: &mut App, branch_name: &str) -> Result<(), Box<dyn Error>> {
-    let output = Command::new("git")
-        .args(["pull", "origin", branch_name])
-        .output()?;
-
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr).to_string();
-        app.add_error(err.clone());
-        return Err(format!("Failed to pull branch: {}", err).into());
-    }
-
-    app.add_log("INFO", format!("Pulled branch: {}", branch_name));
-    Ok(())
-}
-
 pub fn git_has_staged_changes() -> Result<bool, Box<dyn Error>> {
     let output = Command::new("git")
         .args(["diff", "--cached", "--quiet"])
         .output()?;
 
     Ok(!output.status.success())
-}
-
-/// Get unstaged changes as a binary patch, but only if there are actual unstaged changes.
-/// Returns empty Vec if there are no unstaged changes to avoid capturing inverse of staged changes.
-pub fn get_unstaged_patch_if_exists() -> Result<Vec<u8>, Box<dyn Error>> {
-    let has_unstaged_changes = !Command::new("git")
-        .args(["diff", "--quiet"])
-        .status()?
-        .success();
-
-    if has_unstaged_changes {
-        Ok(Command::new("git")
-            .args(["diff", "--binary"])
-            .output()?
-            .stdout)
-    } else {
-        Ok(Vec::new())
-    }
-}
-
-pub fn git_stash_pop_autostash_if_exists(app: &mut App) -> Result<(), Box<dyn Error>> {
-    // List stashes with format showing only the message
-    let output = Command::new("git")
-        .args(["stash", "list", "--format=%gD:%gs"]) // %gD gives ref, %gs gives message
-        .output()?;
-
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr).to_string();
-        app.add_error(err.clone());
-        return Err(format!("Failed to list stashes: {}", err).into());
-    }
-
-    let stash_list = String::from_utf8(output.stdout)?;
-    for line in stash_list.lines() {
-        let parts: Vec<&str> = line.split(':').collect();
-        if parts.len() >= 2
-            && parts[1] == format!("On {}: {}", AUTOCOMMIT_BRANCH_NAME, AUTOSTASH_NAME)
-        {
-            app.add_log("INFO", format!("Found stash with name: {}", AUTOSTASH_NAME));
-            // Use the exact stash reference (parts[0] contains stash@{N})
-            let output = Command::new("git")
-                .args(["stash", "apply", parts[0]])
-                .output()?;
-
-            if !output.status.success() {
-                let err = String::from_utf8_lossy(&output.stderr).to_string();
-                app.add_error(err.clone());
-                return Err(format!("Failed to apply stash: {}", err).into());
-            }
-            app.add_log("INFO", format!("Applied {}", AUTOSTASH_NAME));
-            return Ok(());
-        }
-    }
-
-    app.add_log(
-        "INFO",
-        format!("No stash found with name: {}", AUTOSTASH_NAME),
-    );
-    Ok(())
 }
 
 pub fn git_stage_and_commit(
@@ -959,199 +582,51 @@ pub fn create_or_update_pull_request(
     Ok(())
 }
 
-/// Updates the original worktree to switch to the PR branch and pull the latest changes.
-/// This is called from within a temp worktree before it's cleaned up.
+use std::path::PathBuf;
+
+/// Updates the original worktree to the PR branch after temp worktree cleanup.
+/// Called after the temp worktree is dropped, so we're already back in the original worktree.
 pub fn update_original_worktree_to_pr_branch(
     app: &mut App,
     pr_branch: &str,
-    _original_branch: &str,
     original_root: &PathBuf,
 ) -> Result<(), Box<dyn Error>> {
-    let current_dir = std::env::current_dir()?;
-
-    // Switch to original worktree directory
     std::env::set_current_dir(original_root)?;
 
-    let result = (|| -> Result<(), Box<dyn Error>> {
-        // First, check if the branch exists locally
-        app.add_log(
-            "INFO",
-            format!("Checking if PR branch '{}' exists locally", pr_branch),
-        );
-        let check_local_output = Command::new("git")
-            .args(["rev-parse", "--verify", pr_branch])
+    // Check if branch exists locally
+    let branch_exists = Command::new("git")
+        .args(["rev-parse", "--verify", pr_branch])
+        .status()?
+        .success();
+
+    if branch_exists {
+        // Checkout existing branch
+        let output = Command::new("git")
+            .args(["checkout", pr_branch])
             .output()?;
-
-        if check_local_output.status.success() {
-            // Branch exists locally, check for local changes first
-            app.add_log(
-                "INFO",
-                format!("Branch '{}' exists locally, checking out", pr_branch),
-            );
-
-            // Check if there are local changes that would be overwritten
-            let status_output = Command::new("git")
-                .args(["status", "--porcelain"])
-                .output()?;
-
-            let has_local_changes = !String::from_utf8_lossy(&status_output.stdout)
-                .trim()
-                .is_empty();
-
-            if has_local_changes {
-                app.add_log("INFO", "Local changes detected, stashing before checkout");
-                let stash_output = Command::new("git")
-                    .args([
-                        "stash",
-                        "push",
-                        "-m",
-                        "gh-autopr: temp stash for branch checkout",
-                    ])
-                    .output()?;
-
-                if !stash_output.status.success() {
-                    app.add_error(format!(
-                        "Failed to stash local changes: {}",
-                        String::from_utf8_lossy(&stash_output.stderr)
-                    ));
-                    return Err("Failed to stash local changes".into());
-                }
-            }
-
-            let checkout_output = Command::new("git").args(["checkout", pr_branch]).output()?;
-
-            if !checkout_output.status.success() {
-                app.add_error(format!(
-                    "Failed to checkout existing PR branch: {}",
-                    String::from_utf8_lossy(&checkout_output.stderr)
-                ));
-                return Err("Failed to checkout existing PR branch".into());
-            }
-        } else {
-            // Branch doesn't exist locally, try to fetch/create it
-            app.add_log(
-                "INFO",
-                format!(
-                    "Branch '{}' doesn't exist locally, fetching from remote",
-                    pr_branch
-                ),
-            );
-
-            // First try to fetch the branch
-            let fetch_output = Command::new("git")
-                .args(["fetch", "origin", &format!("{}:{}", pr_branch, pr_branch)])
-                .output()?;
-
-            if !fetch_output.status.success() {
-                // If fetch fails, try to create the branch tracking the remote
-                app.add_log("INFO", "Fetch failed, trying to create tracking branch");
-                let create_output = Command::new("git")
-                    .args([
-                        "checkout",
-                        "-b",
-                        pr_branch,
-                        &format!("origin/{}", pr_branch),
-                    ])
-                    .output()?;
-
-                if !create_output.status.success() {
-                    app.add_error(format!(
-                        "Failed to create tracking branch: {}",
-                        String::from_utf8_lossy(&create_output.stderr)
-                    ));
-                    return Err("Failed to create tracking branch".into());
-                }
-            } else {
-                // Fetch succeeded, now checkout to the branch
-                app.add_log(
-                    "INFO",
-                    format!("Fetched branch '{}', checking out", pr_branch),
-                );
-                let checkout_output = Command::new("git").args(["checkout", pr_branch]).output()?;
-
-                if !checkout_output.status.success() {
-                    app.add_error(format!(
-                        "Failed to checkout fetched PR branch: {}",
-                        String::from_utf8_lossy(&checkout_output.stderr)
-                    ));
-                    return Err("Failed to checkout fetched PR branch".into());
-                }
-            }
+        if !output.status.success() {
+            let err = String::from_utf8_lossy(&output.stderr);
+            app.add_error(format!("Failed to checkout {}: {}", pr_branch, err));
+            return Err(format!("Failed to checkout branch: {}", err).into());
         }
+    } else {
+        // Fetch and checkout from remote
+        let _ = Command::new("git")
+            .args(["fetch", "origin", &format!("{}:{}", pr_branch, pr_branch)])
+            .output();
 
-        // Pull the latest changes with rebase for cleaner history
-        app.add_log("INFO", "Pulling latest changes from origin (with rebase)");
-        let pull_output = Command::new("git")
-            .args(["pull", "--rebase", "origin", pr_branch])
+        let output = Command::new("git")
+            .args(["checkout", pr_branch])
             .output()?;
-
-        if !pull_output.status.success() {
-            let stderr = String::from_utf8_lossy(&pull_output.stderr);
-            if stderr.contains("rebase") || stderr.contains("conflict") {
-                app.add_log(
-                    "WARN",
-                    format!("Rebase failed, falling back to regular pull: {}", stderr),
-                );
-                // Fallback to regular pull
-                let fallback_output = Command::new("git")
-                    .args(["pull", "origin", pr_branch])
-                    .output()?;
-
-                if !fallback_output.status.success() {
-                    app.add_log(
-                        "WARN",
-                        format!(
-                            "Pull failed (this may be normal if branch is up to date): {}",
-                            String::from_utf8_lossy(&fallback_output.stderr)
-                        ),
-                    );
-                } else {
-                    app.add_log("INFO", "Successfully pulled with regular merge");
-                }
-            } else {
-                app.add_log(
-                    "WARN",
-                    format!(
-                        "Pull failed (this may be normal if branch is up to date): {}",
-                        stderr
-                    ),
-                );
-            }
-        } else {
-            app.add_log("INFO", "Successfully pulled with rebase");
+        if !output.status.success() {
+            let err = String::from_utf8_lossy(&output.stderr);
+            app.add_error(format!("Failed to checkout {}: {}", pr_branch, err));
+            return Err(format!("Failed to checkout branch: {}", err).into());
         }
+    }
 
-        app.add_log(
-            "SUCCESS",
-            format!("Original worktree updated to PR branch '{}'", pr_branch),
-        );
-
-        // Check if there are any stashes created by our process
-        let stash_list_output = Command::new("git")
-            .args([
-                "stash",
-                "list",
-                "--grep=gh-autopr: temp stash for branch checkout",
-            ])
-            .output()?;
-
-        if !String::from_utf8_lossy(&stash_list_output.stdout)
-            .trim()
-            .is_empty()
-        {
-            app.add_log(
-                "INFO",
-                "Local changes were stashed before checkout. Use 'git stash pop' to restore them if needed.",
-            );
-        }
-
-        Ok(())
-    })();
-
-    // Always switch back to the temp worktree directory
-    std::env::set_current_dir(&current_dir)?;
-
-    result
+    app.add_log("SUCCESS", format!("Switched to branch '{}'", pr_branch));
+    Ok(())
 }
 
 /// Get merged PRs and their associated branches
