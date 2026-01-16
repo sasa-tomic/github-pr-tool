@@ -114,7 +114,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // All subsequent Git commands act inside the isolated worktree
     let temp_worktree = TempWorktree::enter()?;
 
-    let app_result = run(&mut terminal, &mut app, tick_rate, config, branch_info, temp_worktree).await;
+    let app_result = run(
+        &mut terminal,
+        &mut app,
+        tick_rate,
+        config,
+        branch_info,
+        temp_worktree,
+    )
+    .await;
 
     restore_terminal(&mut terminal)?;
 
@@ -130,7 +138,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     app_result.map(|_| ())
 }
 
-fn restore_terminal<B: Backend + std::io::Write>(terminal: &mut Terminal<B>) -> Result<(), Box<dyn std::error::Error>> {
+fn restore_terminal<B: Backend + std::io::Write>(
+    terminal: &mut Terminal<B>,
+) -> Result<(), Box<dyn std::error::Error>> {
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -227,7 +237,13 @@ async fn run<B: Backend>(
     let is_on_main = current_branch == *main_branch;
     let base_branch = discover_parent_branch(app, main_branch, &current_branch)?;
 
-    app.add_log("INFO", format!("Main: {}, Current: {}, Base: {}", main_branch, current_branch, base_branch));
+    app.add_log(
+        "INFO",
+        format!(
+            "Main: {}, Current: {}, Base: {}",
+            main_branch, current_branch, base_branch
+        ),
+    );
     app.update_progress(0.2);
     refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
 
@@ -332,7 +348,14 @@ async fn run<B: Backend>(
     refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
 
     // Create or update PR
-    app.add_log("INFO", if config.update_pr { "Updating PR..." } else { "Creating PR..." });
+    app.add_log(
+        "INFO",
+        if config.update_pr {
+            "Updating PR..."
+        } else {
+            "Creating PR..."
+        },
+    );
     app.update_progress(0.8);
     refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
 
@@ -353,6 +376,7 @@ async fn run<B: Backend>(
     // Cleanup: update original worktree to PR branch
     let pr_branch = current_branch.clone();
     let orig_root = temp_worktree.original_root().clone();
+    let had_staged = temp_worktree.had_staged_changes();
 
     app.add_log("INFO", "Switching original worktree to PR branch...");
     refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
@@ -362,7 +386,7 @@ async fn run<B: Backend>(
 
     // Drop temp worktree, then update original
     std::mem::drop(temp_worktree);
-    update_original_worktree_to_pr_branch(app, &pr_branch, &orig_root)?;
+    update_original_worktree_to_pr_branch(app, &pr_branch, &orig_root, had_staged)?;
 
     Ok(())
 }
@@ -380,7 +404,10 @@ async fn get_openai_key<B: Backend>(
 
         // Try environment variable and store in keyring
         if let Ok(key) = std::env::var("OPENAI_KEY") {
-            app.add_log("INFO", "Found OpenAI key in environment, storing in keyring");
+            app.add_log(
+                "INFO",
+                "Found OpenAI key in environment, storing in keyring",
+            );
             let _ = entry.set_password(&key);
             return Ok(key);
         }

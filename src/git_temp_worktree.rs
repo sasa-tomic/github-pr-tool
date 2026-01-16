@@ -8,6 +8,10 @@ pub struct TempWorktree {
     path: PathBuf,
     orig_root: PathBuf,
     orig_branch: String,
+    /// Whether the original worktree had staged changes.
+    /// This determines cleanup behavior: if true, only staged changes went to PR,
+    /// so unstaged changes should be preserved in the original worktree.
+    had_staged_changes: bool,
 }
 
 impl TempWorktree {
@@ -48,6 +52,7 @@ impl TempWorktree {
             .args(["diff", "--staged", "--binary"])
             .output()?
             .stdout;
+        let had_staged_changes = !staged_patch.is_empty();
 
         let unstaged_patch = {
             let has_unstaged = !Command::new("git")
@@ -215,12 +220,19 @@ impl TempWorktree {
             path,
             orig_root,
             orig_branch,
+            had_staged_changes,
         })
     }
 
     /// Get the original worktree root path
     pub fn original_root(&self) -> &PathBuf {
         &self.orig_root
+    }
+
+    /// Whether the original worktree had staged changes when entering.
+    /// Used to determine cleanup behavior.
+    pub fn had_staged_changes(&self) -> bool {
+        self.had_staged_changes
     }
 }
 
@@ -250,7 +262,6 @@ impl Drop for TempWorktree {
         let _ = fs_err::remove_dir_all(&self.path); // belt-and-suspenders
     }
 }
-
 
 #[cfg(test)]
 #[path = "git_temp_worktree/tests.rs"]

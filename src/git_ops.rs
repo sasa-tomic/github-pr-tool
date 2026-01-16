@@ -3,6 +3,7 @@ use ratatui::style::Color;
 use ratatui::{backend::Backend, Terminal};
 use std::collections::HashMap;
 use std::error::Error;
+use std::io::Write;
 use std::process::Command;
 
 const MAX_DIFF_BYTES: usize = 200 * 1024; // 200 KiB
@@ -121,7 +122,10 @@ pub fn git_diff_between_branches(
 ) -> Result<String, Box<dyn Error>> {
     app.add_log(
         "INFO",
-        format!("Comparing {} against base branch: {}", current_branch, base_branch),
+        format!(
+            "Comparing {} against base branch: {}",
+            current_branch, base_branch
+        ),
     );
 
     let output = Command::new("git")
@@ -330,7 +334,11 @@ pub fn git_fetch_main(
         app.add_log("INFO", "Fetched latest changes from origin");
     } else {
         let output = Command::new("git")
-            .args(["fetch", "origin", &format!("{}:{}", main_branch, main_branch)])
+            .args([
+                "fetch",
+                "origin",
+                &format!("{}:{}", main_branch, main_branch),
+            ])
             .output()?;
         if !output.status.success() {
             let err = String::from_utf8_lossy(&output.stderr).to_string();
@@ -586,13 +594,106 @@ use std::path::PathBuf;
 
 /// Updates the original worktree to the PR branch after temp worktree cleanup.
 /// Called after the temp worktree is dropped, so we're already back in the original worktree.
+///
+/// The behavior depends on what was committed to the PR:
+/// - If there were STAGED changes: only those went to PR, so discard staged but KEEP unstaged
+/// - If there were NO staged changes: all unstaged changes went to PR, so discard everything
 pub fn update_original_worktree_to_pr_branch(
     app: &mut App,
     pr_branch: &str,
     original_root: &PathBuf,
+    had_staged_changes: bool,
 ) -> Result<(), Box<dyn Error>> {
     std::env::set_current_dir(original_root)?;
 
+    if had_staged_changes {
+        // Only staged changes went to PR. Keep unstaged changes.
+        // 1. Save unstaged changes (working tree vs index), including binary files
+        let unstaged_diff = Command::new("git").args(["diff", "--binary"]).output()?;
+        if !unstaged_diff.status.success() {
+            app.add_log(
+                "WARN",
+                format!(
+                    "Failed to capture unstaged changes: {}",
+                    String::from_utf8_lossy(&unstaged_diff.stderr)
+                ),
+            );
+        }
+        let unstaged_patch = unstaged_diff.stdout;
+
+        // 2. Hard reset to discard staged changes
+        let reset_output = Command::new("git")
+            .args(["reset", "--hard", "HEAD"])
+            .output()?;
+        if !reset_output.status.success() {
+            app.add_log(
+                "WARN",
+                format!(
+                    "Failed to reset: {}",
+                    String::from_utf8_lossy(&reset_output.stderr)
+                ),
+            );
+        }
+
+        // 3. Checkout PR branch
+        checkout_pr_branch(app, pr_branch)?;
+
+        // 4. Re-apply unstaged changes
+        if !unstaged_patch.is_empty() {
+            let mut child = Command::new("git")
+                .args(["apply", "--3way", "-"])
+                .stdin(std::process::Stdio::piped())
+                .spawn()?;
+            if let Some(stdin) = child.stdin.as_mut() {
+                let _ = stdin.write_all(&unstaged_patch);
+            }
+            let status = child.wait()?;
+            if status.success() {
+                app.add_log("INFO", "Restored unstaged changes");
+            } else {
+                app.add_log(
+                    "WARN",
+                    "Some unstaged changes could not be restored cleanly",
+                );
+            }
+        }
+    } else {
+        // All changes (unstaged + untracked) went to PR. Discard everything.
+        let reset_output = Command::new("git")
+            .args(["reset", "--hard", "HEAD"])
+            .output()?;
+        if !reset_output.status.success() {
+            app.add_log(
+                "WARN",
+                format!(
+                    "Failed to reset: {}",
+                    String::from_utf8_lossy(&reset_output.stderr)
+                ),
+            );
+        }
+
+        // Remove untracked files (they were committed to PR)
+        let clean_output = Command::new("git").args(["clean", "-fd"]).output()?;
+        if !clean_output.status.success() {
+            app.add_log(
+                "WARN",
+                format!(
+                    "Failed to clean untracked files: {}",
+                    String::from_utf8_lossy(&clean_output.stderr)
+                ),
+            );
+        }
+
+        // Checkout PR branch
+        checkout_pr_branch(app, pr_branch)?;
+    }
+
+    app.add_log("SUCCESS", format!("Switched to branch '{}'", pr_branch));
+    Ok(())
+}
+
+/// Helper to checkout the PR branch (fetch from remote if needed)
+fn checkout_pr_branch(app: &mut App, pr_branch: &str) -> Result<(), Box<dyn Error>> {
     // Check if branch exists locally
     let branch_exists = Command::new("git")
         .args(["rev-parse", "--verify", pr_branch])
@@ -600,10 +701,7 @@ pub fn update_original_worktree_to_pr_branch(
         .success();
 
     if branch_exists {
-        // Checkout existing branch
-        let output = Command::new("git")
-            .args(["checkout", pr_branch])
-            .output()?;
+        let output = Command::new("git").args(["checkout", pr_branch]).output()?;
         if !output.status.success() {
             let err = String::from_utf8_lossy(&output.stderr);
             app.add_error(format!("Failed to checkout {}: {}", pr_branch, err));
@@ -615,9 +713,7 @@ pub fn update_original_worktree_to_pr_branch(
             .args(["fetch", "origin", &format!("{}:{}", pr_branch, pr_branch)])
             .output();
 
-        let output = Command::new("git")
-            .args(["checkout", pr_branch])
-            .output()?;
+        let output = Command::new("git").args(["checkout", pr_branch]).output()?;
         if !output.status.success() {
             let err = String::from_utf8_lossy(&output.stderr);
             app.add_error(format!("Failed to checkout {}: {}", pr_branch, err));
@@ -625,7 +721,6 @@ pub fn update_original_worktree_to_pr_branch(
         }
     }
 
-    app.add_log("SUCCESS", format!("Switched to branch '{}'", pr_branch));
     Ok(())
 }
 

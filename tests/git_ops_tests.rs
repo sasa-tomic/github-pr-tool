@@ -455,7 +455,8 @@ fn test_update_original_worktree_to_pr_branch() {
     let mut app = App::new("Test App");
     let original_root = std::path::PathBuf::from(&repo_path);
 
-    let result = update_original_worktree_to_pr_branch(&mut app, pr_branch, &original_root);
+    // had_staged_changes=false means all changes went to PR, so discard everything
+    let result = update_original_worktree_to_pr_branch(&mut app, pr_branch, &original_root, false);
 
     // Verify the function succeeded
     if let Err(e) = &result {
@@ -668,7 +669,8 @@ fn test_update_original_worktree_to_pr_branch_with_remote_tracking() {
     let mut app = App::new("Test App");
     let original_root = std::path::PathBuf::from(&repo_path);
 
-    let result = update_original_worktree_to_pr_branch(&mut app, pr_branch, &original_root);
+    // had_staged_changes=false means all changes went to PR, so discard everything
+    let result = update_original_worktree_to_pr_branch(&mut app, pr_branch, &original_root, false);
 
     // Verify the function succeeded
     if let Err(e) = &result {
@@ -962,7 +964,10 @@ fn test_temp_worktree_preserves_branch() {
         .unwrap()
         .trim()
         .to_string();
-    assert_eq!(branch, "feature-branch", "Should be on same branch in temp worktree");
+    assert_eq!(
+        branch, "feature-branch",
+        "Should be on same branch in temp worktree"
+    );
 
     drop(temp_worktree);
 
@@ -975,7 +980,10 @@ fn test_temp_worktree_preserves_branch() {
         .unwrap()
         .trim()
         .to_string();
-    assert_eq!(branch, "feature-branch", "Should still be on feature-branch after cleanup");
+    assert_eq!(
+        branch, "feature-branch",
+        "Should still be on feature-branch after cleanup"
+    );
 
     let _ = env::set_current_dir(&original_dir);
 }
@@ -1047,7 +1055,10 @@ fn test_temp_worktree_full_workflow() {
         .args(["checkout", "feat/new-feature"])
         .output()
         .expect("Failed to checkout branch");
-    assert!(checkout.status.success(), "Should be able to checkout PR branch");
+    assert!(
+        checkout.status.success(),
+        "Should be able to checkout PR branch"
+    );
 
     // Verify the commit is there
     let log = Command::new("git")
@@ -1055,7 +1066,10 @@ fn test_temp_worktree_full_workflow() {
         .output()
         .expect("Failed to get log");
     let log_output = String::from_utf8(log.stdout).unwrap();
-    assert!(log_output.contains("Add new feature"), "Commit should be visible");
+    assert!(
+        log_output.contains("Add new feature"),
+        "Commit should be visible"
+    );
 
     let _ = env::set_current_dir(&original_dir);
 }
@@ -1069,7 +1083,7 @@ fn test_temp_worktree_full_workflow() {
 fn test_temp_worktree_cleanup_on_early_drop() {
     // Verify that temp worktree is cleaned up even if we drop it early
     // (simulating an error scenario where the workflow doesn't complete)
-    
+
     let (_temp_dir, repo_path) = create_test_repo();
     let original_dir = env::current_dir().expect("Failed to get current directory");
 
@@ -1081,7 +1095,7 @@ fn test_temp_worktree_cleanup_on_early_drop() {
     let orig_root = {
         let temp_worktree = TempWorktree::enter().expect("Failed to enter temp worktree");
         let root = temp_worktree.original_root().clone();
-        
+
         // Simulate an error scenario - drop without completing workflow
         // This tests that RAII cleanup works
         drop(temp_worktree);
@@ -1090,7 +1104,10 @@ fn test_temp_worktree_cleanup_on_early_drop() {
 
     // Verify cleanup happened
     let current_dir = env::current_dir().expect("Failed to get current dir");
-    assert_eq!(current_dir, orig_root, "Should be back in original dir after early drop");
+    assert_eq!(
+        current_dir, orig_root,
+        "Should be back in original dir after early drop"
+    );
 
     // Verify no temp worktrees remain
     let worktree_list = Command::new("git")
@@ -1129,8 +1146,11 @@ fn test_create_pr_error_no_existing_pr_to_update() {
     );
 
     // Should fail with appropriate error
-    assert!(result.is_err(), "Should fail when trying to update non-existent PR");
-    
+    assert!(
+        result.is_err(),
+        "Should fail when trying to update non-existent PR"
+    );
+
     // Error should be logged
     assert!(
         !app.errors.is_empty(),
@@ -1154,7 +1174,7 @@ fn test_git_checkout_new_branch_error_branch_exists() {
         .args(["checkout", "-b", "existing-branch"])
         .output()
         .expect("Failed to create branch");
-    
+
     Command::new("git")
         .args(["checkout", "main"])
         .output()
@@ -1187,7 +1207,10 @@ fn test_git_diff_between_branches_error_invalid_branch() {
 
     let result = git_diff_between_branches(&mut app, "nonexistent-base", "main");
 
-    assert!(result.is_err(), "Should fail when base branch doesn't exist");
+    assert!(
+        result.is_err(),
+        "Should fail when base branch doesn't exist"
+    );
 
     let _ = env::set_current_dir(&original_dir);
 }
@@ -1225,13 +1248,18 @@ fn test_update_original_worktree_error_invalid_branch() {
     let repo_path_buf = std::path::PathBuf::from(&repo_path);
 
     // Try to switch to a branch that doesn't exist locally or remotely
+    // had_staged_changes=false means all changes went to PR, so discard everything
     let result = update_original_worktree_to_pr_branch(
         &mut app,
         "completely-nonexistent-branch-xyz",
         &repo_path_buf,
+        false,
     );
 
-    assert!(result.is_err(), "Should fail when branch doesn't exist anywhere");
+    assert!(
+        result.is_err(),
+        "Should fail when branch doesn't exist anywhere"
+    );
     assert!(!app.errors.is_empty(), "Should log an error");
 
     let _ = env::set_current_dir(&original_dir);
@@ -1271,11 +1299,12 @@ fn test_temp_worktree_multiple_sequential_creates() {
             .expect("Failed to write file");
 
         let temp_worktree = TempWorktree::enter().expect("Failed to enter temp worktree");
-        
+
         // Verify file exists in temp worktree
         assert!(
             Path::new(&format!("file_{}.txt", i)).exists(),
-            "File should exist in temp worktree iteration {}", i
+            "File should exist in temp worktree iteration {}",
+            i
         );
 
         drop(temp_worktree);
@@ -1288,7 +1317,8 @@ fn test_temp_worktree_multiple_sequential_creates() {
         let worktrees = String::from_utf8(worktree_list.stdout).unwrap();
         assert!(
             !worktrees.contains("autopr-wt-"),
-            "Temp worktree should be cleaned up after iteration {}", i
+            "Temp worktree should be cleaned up after iteration {}",
+            i
         );
     }
 
@@ -1308,13 +1338,13 @@ fn test_git_ensure_in_repo_error_not_in_repo() {
 
     // Change to a directory that is NOT a git repo
     env::set_current_dir(temp_dir.path()).expect("Failed to change directory");
-    
+
     // Verify the git command would fail (git_ensure_in_repo calls process::exit)
     let output = Command::new("git")
         .args(["rev-parse", "--is-inside-work-tree"])
         .output()
         .expect("Failed to run git");
-    
+
     assert!(!output.status.success(), "Should fail when not in git repo");
 
     let _ = env::set_current_dir(&original_dir);
@@ -1330,7 +1360,7 @@ fn test_git_commit_staged_changes_error_nothing_staged() {
     env::set_current_dir(&repo_path).expect("Failed to change directory");
 
     let mut app = App::new("Test App");
-    
+
     // Try to commit with nothing staged - should fail
     let result = git_commit_staged_changes(&mut app, "Empty commit", &None);
 
@@ -1350,7 +1380,7 @@ fn test_git_stage_and_commit_error_nothing_to_stage() {
     env::set_current_dir(&repo_path).expect("Failed to change directory");
 
     let mut app = App::new("Test App");
-    
+
     // Try to stage and commit with no changes - should fail
     let result = git_stage_and_commit(&mut app, "No changes commit", &None);
 
@@ -1369,7 +1399,7 @@ fn test_discover_parent_branch_returns_main_for_unknown() {
     env::set_current_dir(&repo_path).expect("Failed to change directory");
 
     let mut app = App::new("Test App");
-    
+
     // Should return main as fallback for unknown branch
     let result = discover_parent_branch(&mut app, "main", "nonexistent-child");
     assert!(result.is_ok());
@@ -1388,11 +1418,14 @@ fn test_git_checkout_new_branch_error_invalid_base() {
     env::set_current_dir(&repo_path).expect("Failed to change directory");
 
     let mut app = App::new("Test App");
-    
+
     // Try to create branch from non-existent base
     let result = git_checkout_new_branch(&mut app, "new-branch", "nonexistent-base", false);
 
-    assert!(result.is_err(), "Should fail when base branch doesn't exist");
+    assert!(
+        result.is_err(),
+        "Should fail when base branch doesn't exist"
+    );
 
     let _ = env::set_current_dir(&original_dir);
 }
@@ -1538,7 +1571,7 @@ fn test_get_local_branches_success() {
 }
 
 #[test]
-#[serial] 
+#[serial]
 fn test_remote_branch_exists_no_remote_configured() {
     // Test checking remote branch when no remote configured returns false
     let (_temp_dir, repo_path) = create_test_repo();
@@ -1583,22 +1616,22 @@ fn test_get_merged_prs_error_no_github() {
 #[serial]
 fn test_truncate_utf8_edge_cases() {
     // Test truncation edge cases
-    
+
     // Empty string
     assert_eq!(truncate_utf8("", 10), "");
-    
+
     // String shorter than limit
     assert_eq!(truncate_utf8("short", 100), "short");
-    
+
     // Exact limit
     assert_eq!(truncate_utf8("12345", 5), "12345");
-    
+
     // Multi-byte UTF-8 at boundary - should not split character
     let emoji = "Hello 👋 World";
     let truncated = truncate_utf8(emoji, 8);
     assert!(truncated.len() <= 8);
     assert!(truncated.is_char_boundary(truncated.len()));
-    
+
     // All multi-byte characters
     let chinese = "你好世界";
     let truncated = truncate_utf8(chinese, 5);
@@ -1619,7 +1652,10 @@ fn test_git_diff_uncommitted_no_changes() {
     let result = git_diff_uncommitted(&mut app, "main");
 
     assert!(result.is_ok());
-    assert!(result.unwrap().is_empty(), "Should return empty diff when no changes");
+    assert!(
+        result.unwrap().is_empty(),
+        "Should return empty diff when no changes"
+    );
 
     let _ = env::set_current_dir(&original_dir);
 }
@@ -1634,7 +1670,7 @@ fn test_git_has_staged_changes_false_when_none() {
     env::set_current_dir(&repo_path).expect("Failed to change directory");
 
     let result = git_has_staged_changes();
-    
+
     assert!(result.is_ok());
     assert!(!result.unwrap(), "Should return false when nothing staged");
 
@@ -1658,9 +1694,449 @@ fn test_git_has_staged_changes_true_when_staged() {
         .expect("Failed to stage");
 
     let result = git_has_staged_changes();
-    
+
     assert!(result.is_ok());
     assert!(result.unwrap(), "Should return true when changes staged");
+
+    let _ = env::set_current_dir(&original_dir);
+}
+
+// ============================================================================
+// Edge Case Tests for update_original_worktree_to_pr_branch
+// ============================================================================
+
+#[test]
+#[serial]
+fn test_update_worktree_preserves_unstaged_when_staged_exists() {
+    // Scenario: User has staged changes to file A and unstaged changes to file B
+    // Expected: After PR creation, file B's unstaged changes should be preserved
+    let (_temp_dir, repo_path) = create_test_repo();
+    let original_dir = env::current_dir().expect("Failed to get current directory");
+
+    env::set_current_dir(&repo_path).expect("Failed to change directory");
+
+    // Create and commit a base file that we'll modify (unstaged)
+    fs::write("unstaged_file.txt", "original content").expect("Failed to write");
+    Command::new("git")
+        .args(["add", "unstaged_file.txt"])
+        .output()
+        .expect("Failed to stage");
+    Command::new("git")
+        .args(["commit", "-m", "Add unstaged_file"])
+        .output()
+        .expect("Failed to commit");
+
+    // Create PR branch with a staged change
+    Command::new("git")
+        .args(["checkout", "-b", "pr-branch"])
+        .output()
+        .expect("Failed to create branch");
+
+    fs::write("staged_file.txt", "staged content").expect("Failed to write");
+    Command::new("git")
+        .args(["add", "staged_file.txt"])
+        .output()
+        .expect("Failed to stage");
+    Command::new("git")
+        .args(["commit", "-m", "Add staged file"])
+        .output()
+        .expect("Failed to commit");
+
+    // Go back to main
+    Command::new("git")
+        .args(["checkout", "main"])
+        .output()
+        .expect("Failed to checkout main");
+
+    // Now simulate the scenario: staged change + unstaged change
+    fs::write("new_staged.txt", "will be staged").expect("Failed to write");
+    Command::new("git")
+        .args(["add", "new_staged.txt"])
+        .output()
+        .expect("Failed to stage");
+
+    // Make unstaged modification to existing file
+    fs::write("unstaged_file.txt", "modified unstaged content").expect("Failed to write");
+
+    // Verify setup
+    assert!(
+        git_has_staged_changes().unwrap(),
+        "Should have staged changes"
+    );
+    let diff_output = Command::new("git").args(["diff"]).output().unwrap();
+    assert!(
+        !diff_output.stdout.is_empty(),
+        "Should have unstaged changes"
+    );
+
+    let mut app = App::new("Test App");
+    let original_root = std::path::PathBuf::from(&repo_path);
+
+    // Call with had_staged_changes=true
+    let result = update_original_worktree_to_pr_branch(&mut app, "pr-branch", &original_root, true);
+
+    assert!(result.is_ok(), "Should succeed: {:?}", result);
+
+    // Verify we're on pr-branch
+    let branch_output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .expect("Failed to get branch");
+    let branch = String::from_utf8(branch_output.stdout)
+        .unwrap()
+        .trim()
+        .to_string();
+    assert_eq!(branch, "pr-branch");
+
+    // Verify unstaged changes were preserved
+    let content = fs::read_to_string("unstaged_file.txt").expect("Failed to read");
+    assert_eq!(
+        content, "modified unstaged content",
+        "Unstaged changes should be preserved"
+    );
+
+    let _ = env::set_current_dir(&original_dir);
+}
+
+#[test]
+#[serial]
+fn test_update_worktree_preserves_untracked_when_staged_exists() {
+    // Scenario: User has staged changes + untracked files
+    // Expected: Untracked files should be preserved (not cleaned)
+    let (_temp_dir, repo_path) = create_test_repo();
+    let original_dir = env::current_dir().expect("Failed to get current directory");
+
+    env::set_current_dir(&repo_path).expect("Failed to change directory");
+
+    // Create PR branch
+    Command::new("git")
+        .args(["checkout", "-b", "pr-branch"])
+        .output()
+        .expect("Failed to create branch");
+
+    fs::write("pr_file.txt", "pr content").expect("Failed to write");
+    Command::new("git")
+        .args(["add", "pr_file.txt"])
+        .output()
+        .expect("Failed to stage");
+    Command::new("git")
+        .args(["commit", "-m", "PR commit"])
+        .output()
+        .expect("Failed to commit");
+
+    // Go back to main
+    Command::new("git")
+        .args(["checkout", "main"])
+        .output()
+        .expect("Failed to checkout main");
+
+    // Create staged change
+    fs::write("staged.txt", "staged").expect("Failed to write");
+    Command::new("git")
+        .args(["add", "staged.txt"])
+        .output()
+        .expect("Failed to stage");
+
+    // Create untracked file (not staged)
+    fs::write("untracked.txt", "untracked content").expect("Failed to write");
+
+    let mut app = App::new("Test App");
+    let original_root = std::path::PathBuf::from(&repo_path);
+
+    // Call with had_staged_changes=true
+    let result = update_original_worktree_to_pr_branch(&mut app, "pr-branch", &original_root, true);
+
+    assert!(result.is_ok(), "Should succeed: {:?}", result);
+
+    // Verify untracked file still exists
+    assert!(
+        Path::new("untracked.txt").exists(),
+        "Untracked file should be preserved when had_staged_changes=true"
+    );
+    let content = fs::read_to_string("untracked.txt").expect("Failed to read");
+    assert_eq!(content, "untracked content");
+
+    let _ = env::set_current_dir(&original_dir);
+}
+
+#[test]
+#[serial]
+fn test_update_worktree_cleans_all_when_no_staged() {
+    // Scenario: No staged changes, only unstaged + untracked
+    // Expected: Everything should be cleaned (went to PR)
+    let (_temp_dir, repo_path) = create_test_repo();
+    let original_dir = env::current_dir().expect("Failed to get current directory");
+
+    env::set_current_dir(&repo_path).expect("Failed to change directory");
+
+    // Create PR branch with the changes that "went to PR"
+    Command::new("git")
+        .args(["checkout", "-b", "pr-branch"])
+        .output()
+        .expect("Failed to create branch");
+
+    fs::write("new_file.txt", "new content").expect("Failed to write");
+    fs::write("README.md", "modified readme").expect("Failed to write");
+    Command::new("git")
+        .args(["add", "."])
+        .output()
+        .expect("Failed to stage");
+    Command::new("git")
+        .args(["commit", "-m", "PR changes"])
+        .output()
+        .expect("Failed to commit");
+
+    // Go back to main
+    Command::new("git")
+        .args(["checkout", "main"])
+        .output()
+        .expect("Failed to checkout main");
+
+    // Recreate the "dirty" state that would have been committed
+    fs::write("new_file.txt", "new content").expect("Failed to write");
+    fs::write("README.md", "modified readme").expect("Failed to write");
+
+    // Verify no staged changes
+    assert!(
+        !git_has_staged_changes().unwrap(),
+        "Should not have staged changes"
+    );
+
+    let mut app = App::new("Test App");
+    let original_root = std::path::PathBuf::from(&repo_path);
+
+    // Call with had_staged_changes=false (everything went to PR)
+    let result =
+        update_original_worktree_to_pr_branch(&mut app, "pr-branch", &original_root, false);
+
+    assert!(result.is_ok(), "Should succeed: {:?}", result);
+
+    // Verify we're on pr-branch
+    let branch_output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .expect("Failed to get branch");
+    let branch = String::from_utf8(branch_output.stdout)
+        .unwrap()
+        .trim()
+        .to_string();
+    assert_eq!(branch, "pr-branch");
+
+    // Verify working directory is clean
+    let status = Command::new("git")
+        .args(["status", "--porcelain"])
+        .output()
+        .expect("Failed to get status");
+    let status_str = String::from_utf8(status.stdout).unwrap();
+    assert!(
+        status_str.trim().is_empty(),
+        "Working directory should be clean, got: {}",
+        status_str
+    );
+
+    let _ = env::set_current_dir(&original_dir);
+}
+
+#[test]
+#[serial]
+fn test_update_worktree_handles_binary_files() {
+    // Scenario: Unstaged binary file changes should be preserved
+    let (_temp_dir, repo_path) = create_test_repo();
+    let original_dir = env::current_dir().expect("Failed to get current directory");
+
+    env::set_current_dir(&repo_path).expect("Failed to change directory");
+
+    // Create and commit a binary file
+    let binary_content: Vec<u8> = vec![0x00, 0x01, 0x02, 0xFF, 0xFE, 0xFD];
+    fs::write("binary.bin", &binary_content).expect("Failed to write binary");
+    Command::new("git")
+        .args(["add", "binary.bin"])
+        .output()
+        .expect("Failed to stage");
+    Command::new("git")
+        .args(["commit", "-m", "Add binary file"])
+        .output()
+        .expect("Failed to commit");
+
+    // Create PR branch
+    Command::new("git")
+        .args(["checkout", "-b", "pr-branch"])
+        .output()
+        .expect("Failed to create branch");
+
+    fs::write("pr_change.txt", "pr content").expect("Failed to write");
+    Command::new("git")
+        .args(["add", "pr_change.txt"])
+        .output()
+        .expect("Failed to stage");
+    Command::new("git")
+        .args(["commit", "-m", "PR commit"])
+        .output()
+        .expect("Failed to commit");
+
+    // Go back to main
+    Command::new("git")
+        .args(["checkout", "main"])
+        .output()
+        .expect("Failed to checkout main");
+
+    // Stage a text file change
+    fs::write("staged.txt", "staged").expect("Failed to write");
+    Command::new("git")
+        .args(["add", "staged.txt"])
+        .output()
+        .expect("Failed to stage");
+
+    // Modify the binary file (unstaged)
+    let modified_binary: Vec<u8> = vec![0xAA, 0xBB, 0xCC, 0xDD];
+    fs::write("binary.bin", &modified_binary).expect("Failed to write modified binary");
+
+    let mut app = App::new("Test App");
+    let original_root = std::path::PathBuf::from(&repo_path);
+
+    // Call with had_staged_changes=true
+    let result = update_original_worktree_to_pr_branch(&mut app, "pr-branch", &original_root, true);
+
+    assert!(result.is_ok(), "Should succeed: {:?}", result);
+
+    // Verify binary file changes were preserved
+    let content = fs::read("binary.bin").expect("Failed to read binary");
+    assert_eq!(
+        content, modified_binary,
+        "Binary file unstaged changes should be preserved"
+    );
+
+    let _ = env::set_current_dir(&original_dir);
+}
+
+#[test]
+#[serial]
+fn test_update_worktree_same_file_staged_and_unstaged() {
+    // Scenario: Same file has both staged and unstaged changes
+    // This is a complex case - staged changes went to PR, unstaged should be preserved
+    let (_temp_dir, repo_path) = create_test_repo();
+    let original_dir = env::current_dir().expect("Failed to get current directory");
+
+    env::set_current_dir(&repo_path).expect("Failed to change directory");
+
+    // Create initial file with multiple lines
+    fs::write("mixed.txt", "line1\nline2\nline3\nline4\n").expect("Failed to write");
+    Command::new("git")
+        .args(["add", "mixed.txt"])
+        .output()
+        .expect("Failed to stage");
+    Command::new("git")
+        .args(["commit", "-m", "Add mixed file"])
+        .output()
+        .expect("Failed to commit");
+
+    // Create PR branch with staged changes
+    Command::new("git")
+        .args(["checkout", "-b", "pr-branch"])
+        .output()
+        .expect("Failed to create branch");
+
+    // Modify first part and commit (simulating what went to PR)
+    fs::write("mixed.txt", "MODIFIED1\nline2\nline3\nline4\n").expect("Failed to write");
+    Command::new("git")
+        .args(["add", "mixed.txt"])
+        .output()
+        .expect("Failed to stage");
+    Command::new("git")
+        .args(["commit", "-m", "PR changes"])
+        .output()
+        .expect("Failed to commit");
+
+    // Go back to main
+    Command::new("git")
+        .args(["checkout", "main"])
+        .output()
+        .expect("Failed to checkout main");
+
+    // Stage the same change that went to PR
+    fs::write("mixed.txt", "MODIFIED1\nline2\nline3\nline4\n").expect("Failed to write");
+    Command::new("git")
+        .args(["add", "mixed.txt"])
+        .output()
+        .expect("Failed to stage");
+
+    // Now add additional unstaged changes (different line)
+    fs::write("mixed.txt", "MODIFIED1\nline2\nMODIFIED3\nline4\n").expect("Failed to write");
+
+    let mut app = App::new("Test App");
+    let original_root = std::path::PathBuf::from(&repo_path);
+
+    // Call with had_staged_changes=true
+    let result = update_original_worktree_to_pr_branch(&mut app, "pr-branch", &original_root, true);
+
+    // This might partially fail due to conflicts, but should not error out
+    assert!(
+        result.is_ok(),
+        "Should succeed (may warn about conflicts): {:?}",
+        result
+    );
+
+    // We're on PR branch
+    let branch_output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .expect("Failed to get branch");
+    let branch = String::from_utf8(branch_output.stdout)
+        .unwrap()
+        .trim()
+        .to_string();
+    assert_eq!(branch, "pr-branch");
+
+    // The file should exist and contain the merged/applied changes
+    // Due to 3-way merge, the unstaged change to line3 should be applied
+    let content = fs::read_to_string("mixed.txt").expect("Failed to read");
+    assert!(content.contains("MODIFIED1"), "Should have the PR change");
+    // The unstaged change might or might not apply cleanly depending on git version
+    // We just verify the operation completed
+
+    let _ = env::set_current_dir(&original_dir);
+}
+
+#[test]
+#[serial]
+fn test_temp_worktree_tracks_staged_changes_flag() {
+    // Verify TempWorktree correctly tracks whether there were staged changes
+    let (_temp_dir, repo_path) = create_test_repo();
+    let original_dir = env::current_dir().expect("Failed to get current directory");
+
+    env::set_current_dir(&repo_path).expect("Failed to change directory");
+
+    // Test 1: No staged changes
+    {
+        fs::write("unstaged.txt", "unstaged").expect("Failed to write");
+        // Don't stage it
+
+        let temp_worktree = TempWorktree::enter().expect("Failed to enter temp worktree");
+        assert!(
+            !temp_worktree.had_staged_changes(),
+            "Should report no staged changes"
+        );
+        drop(temp_worktree);
+
+        // Clean up
+        fs::remove_file("unstaged.txt").ok();
+    }
+
+    // Test 2: With staged changes
+    {
+        fs::write("staged.txt", "staged").expect("Failed to write");
+        Command::new("git")
+            .args(["add", "staged.txt"])
+            .output()
+            .expect("Failed to stage");
+
+        let temp_worktree = TempWorktree::enter().expect("Failed to enter temp worktree");
+        assert!(
+            temp_worktree.had_staged_changes(),
+            "Should report staged changes exist"
+        );
+        drop(temp_worktree);
+    }
 
     let _ = env::set_current_dir(&original_dir);
 }
