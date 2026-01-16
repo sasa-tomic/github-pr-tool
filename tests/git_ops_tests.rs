@@ -1583,9 +1583,8 @@ fn test_remote_branch_exists_no_remote_configured() {
     let result = remote_branch_exists(&mut app, "origin/main");
 
     // Should return false - no remote configured
-    match result {
-        Ok(exists) => assert!(!exists, "Should not find remote branch when no remote"),
-        Err(_) => {} // Error is also acceptable
+    if let Ok(exists) = result {
+        assert!(!exists, "Should not find remote branch when no remote")
     }
 
     let _ = env::set_current_dir(&original_dir);
