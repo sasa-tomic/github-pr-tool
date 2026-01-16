@@ -116,6 +116,37 @@ pub fn truncate_utf8(s: &str, max_bytes: usize) -> String {
     s[..end].to_owned()
 }
 
+/// Try to find the parent branch from git's reflog using `@{-1}` syntax.
+/// Returns the parent branch name or the fallback if not found.
+fn try_find_git_parent_branch(
+    app: &mut App,
+    current_branch: &str,
+    fallback: &str,
+    log_on_success: bool,
+) -> Result<String, Box<dyn Error>> {
+    let output = Command::new("git")
+        .args([
+            "rev-parse",
+            "--abbrev-ref",
+            &format!("{}@{{-1}}", current_branch),
+        ])
+        .output()?;
+
+    if output.status.success() {
+        let parent = String::from_utf8(output.stdout)?
+            .trim()
+            .trim_start_matches("origin/")
+            .to_string();
+        if !parent.is_empty() {
+            if log_on_success {
+                app.add_log("INFO", format!("Using parent branch {} for diff", parent));
+            }
+            return Ok(parent);
+        }
+    }
+    Ok(fallback.to_owned())
+}
+
 /// Determines the base branch for comparing changes and generating diffs.
 ///
 /// For an existing PR: Uses the PR's base branch
@@ -143,6 +174,7 @@ pub fn git_diff_between_branches(
     let base_branch = if base_branch_output.status.success() {
         let json_str = String::from_utf8(base_branch_output.stdout)?;
         if !json_str.trim().is_empty() && json_str != "[]" {
+            // Try to extract base branch from PR JSON
             if let Some(base) = json_str
                 .lines()
                 .next()
@@ -156,65 +188,12 @@ pub fn git_diff_between_branches(
                 );
                 base
             } else {
-                // If no PR exists, try to find the parent branch this was branched from
-                let parent_branch_output = Command::new("git")
-                    .args([
-                        "rev-parse",
-                        "--abbrev-ref",
-                        &format!("{}@{{-1}}", current_branch),
-                    ])
-                    .output()?;
-
-                if parent_branch_output.status.success() {
-                    let parent = String::from_utf8(parent_branch_output.stdout)?
-                        .trim()
-                        .trim_start_matches("origin/")
-                        .to_string();
-                    if !parent.is_empty() {
-                        app.add_log("INFO", format!("Using parent branch {} for diff", parent));
-                        parent
-                    } else {
-                        app.add_error(format!(
-                            "Found invalid empty parent branch, using {} instead",
-                            parent_branch
-                        ));
-                        parent_branch.to_owned()
-                    }
-                } else {
-                    app.add_log(
-                        "WARN",
-                        format!(
-                            "No parent branch marked in git, using branch {}",
-                            parent_branch
-                        ),
-                    );
-                    parent_branch.to_owned()
-                }
+                // No PR base found, try git reflog
+                try_find_git_parent_branch(app, current_branch, parent_branch, true)?
             }
         } else {
-            // No PR exists, try to find parent branch
-            let parent_branch_output = Command::new("git")
-                .args([
-                    "rev-parse",
-                    "--abbrev-ref",
-                    &format!("{}@{{-1}}", current_branch),
-                ])
-                .output()?;
-
-            if parent_branch_output.status.success() {
-                let parent = String::from_utf8(parent_branch_output.stdout)?
-                    .trim()
-                    .trim_start_matches("origin/")
-                    .to_string();
-                if !parent.is_empty() {
-                    app.add_log("INFO", format!("Using parent branch {} for diff", parent));
-                    parent
-                } else {
-                    parent_branch.to_owned()
-                }
-            } else {
-                parent_branch.to_owned()
-            }
+            // No PR exists, try git reflog
+            try_find_git_parent_branch(app, current_branch, parent_branch, true)?
         }
     } else {
         parent_branch.to_owned()

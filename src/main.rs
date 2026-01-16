@@ -171,39 +171,32 @@ async fn pre_worktree_setup<B: Backend>(
 
     // Check that we're in a git repo
     app.add_log("INFO", "Checking git repository...");
-    terminal.draw(|f| ui(f, app))?;
-    check_events(terminal, app, tick_rate, &mut last_tick)?;
+    refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
     git_ensure_in_repo(app)?;
 
     // Navigate to repo root
     app.add_log("INFO", "Navigating to repository root...");
-    terminal.draw(|f| ui(f, app))?;
-    check_events(terminal, app, tick_rate, &mut last_tick)?;
+    refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
     git_cd_to_repo_root(app)?;
 
     // Get branch information
     let main_branch = git_main_branch(app).unwrap_or_else(|_| "main".to_string());
-    terminal.draw(|f| ui(f, app))?;
-    check_events(terminal, app, tick_rate, &mut last_tick)?;
+    refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
 
     let current_branch = git_current_branch(app)?;
-    terminal.draw(|f| ui(f, app))?;
-    check_events(terminal, app, tick_rate, &mut last_tick)?;
+    refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
 
     // Ensure we're not in detached HEAD
     git_ensure_not_detached_head(terminal, app, &current_branch)?;
-    terminal.draw(|f| ui(f, app))?;
-    check_events(terminal, app, tick_rate, &mut last_tick)?;
+    refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
 
     // Fetch main branch - THIS MUST HAPPEN BEFORE ENTERING TEMP WORKTREE
     app.add_log("INFO", "Fetching latest changes...");
-    terminal.draw(|f| ui(f, app))?;
-    check_events(terminal, app, tick_rate, &mut last_tick)?;
+    refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
     git_fetch_main(app, &current_branch, &main_branch)?;
 
     app.add_log("INFO", "Pre-worktree setup completed successfully");
-    terminal.draw(|f| ui(f, app))?;
-    check_events(terminal, app, tick_rate, &mut last_tick)?;
+    refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
 
     Ok(())
 }
@@ -217,22 +210,8 @@ async fn run<B: Backend>(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut last_tick = Instant::now();
 
-    // Start UI loop immediately to show initialization progress
-    let ui_update = tokio::spawn({
-        let mut last_tick = Instant::now();
-        async move {
-            loop {
-                tokio::time::sleep(tick_rate).await;
-                if last_tick.elapsed() >= tick_rate {
-                    last_tick = Instant::now();
-                }
-            }
-        }
-    });
-
     // Initial UI render
-    terminal.draw(|f| ui(f, app))?;
-    check_events(terminal, app, tick_rate, &mut last_tick)?;
+    refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
 
     let api_key = match keyring::Entry::new("gh-autopr", "openai_key") {
         Ok(entry) => match entry.get_password() {
@@ -272,13 +251,11 @@ async fn run<B: Backend>(
     // Initialize OpenAI and GitHub logic
     app.add_log("INFO", "Initializing in temp worktree...");
     app.update_progress(0.1);
-    terminal.draw(|f| ui(f, app))?;
-    check_events(terminal, app, tick_rate, &mut last_tick)?;
+    refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
 
     // Re-detect branch information in temp worktree context
     let main_branch = git_main_branch(app).unwrap_or_else(|_| "main".to_string());
-    terminal.draw(|f| ui(f, app))?;
-    check_events(terminal, app, tick_rate, &mut last_tick)?;
+    refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
 
     let mut current_branch = git_current_branch(app)?;
     let is_current_branch_main = current_branch == main_branch;
@@ -294,12 +271,15 @@ async fn run<B: Backend>(
         format!("Main branch: {main_branch}, Current branch: {current_branch}"),
     );
     app.update_progress(0.3);
-    terminal.draw(|f| ui(f, app))?;
-    check_events(terminal, app, tick_rate, &mut last_tick)?;
+    refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
 
     let diff_uncommitted = git_diff_uncommitted(app, &current_branch)?;
-    terminal.draw(|f| ui(f, app))?;
-    check_events(terminal, app, tick_rate, &mut last_tick)?;
+    refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
+
+    // Fetch GitHub issues once - will be reused for all GPT calls
+    app.add_log("INFO", "Fetching GitHub issues...");
+    refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
+    let issues_json = github_list_issues(app)?;
 
     // Track whether we created a fresh branch from uncommitted changes.
     // If so, we can reuse the GPT response for PR instead of calling again.
@@ -311,37 +291,27 @@ async fn run<B: Backend>(
             render_message(terminal, "Info", "No changes to commit.", Color::Cyan)?;
             app.update_progress(1.0);
             terminal.draw(|f| ui(f, app))?;
-            ui_update.abort();
             run_event_loop(terminal, app, tick_rate, &mut last_tick)?;
             return Ok(());
         }
     } else {
         app.update_details(diff_uncommitted.clone());
-        terminal.draw(|f| ui(f, app))?;
-        check_events(terminal, app, tick_rate, &mut last_tick)?;
-
-        app.add_log("INFO", "Fetching GitHub issues...");
-        terminal.draw(|f| ui(f, app))?;
-        check_events(terminal, app, tick_rate, &mut last_tick)?;
-
-        let issues_json = github_list_issues(app)?;
+        refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
 
         app.add_log("INFO", "Generating branch name and commit description...");
-        terminal.draw(|f| ui(f, app))?;
-        check_events(terminal, app, tick_rate, &mut last_tick)?;
+        refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
 
         let (generated_branch_name, commit_title, commit_details) =
             gpt_generate_branch_name_and_commit_description(
                 app,
                 diff_uncommitted,
-                Some(issues_json),
+                Some(issues_json.clone()),
                 config.what.clone(),
                 config.why.clone(),
                 config.bigger_picture.clone(),
             )
             .await?;
-        terminal.draw(|f| ui(f, app))?;
-        check_events(terminal, app, tick_rate, &mut last_tick)?;
+        refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
 
         let created_fresh_branch = is_current_branch_main || !config.update_pr;
         if created_fresh_branch {
@@ -357,10 +327,9 @@ async fn run<B: Backend>(
             terminal.draw(|f| ui(f, app))?;
         }
 
-        check_events(terminal, app, tick_rate, &mut last_tick)?;
+        refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
         git_stage_and_commit(app, &commit_title, &commit_details)?;
-        terminal.draw(|f| ui(f, app))?;
-        check_events(terminal, app, tick_rate, &mut last_tick)?;
+        refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
     }
 
     let diff_between_branches =
@@ -375,8 +344,7 @@ async fn run<B: Backend>(
                 return Err(err);
             }
         };
-    terminal.draw(|f| ui(f, app))?;
-    check_events(terminal, app, tick_rate, &mut last_tick)?;
+    refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
 
     if diff_between_branches.is_empty() {
         app.add_log("INFO", "No changes between the branches.");
@@ -391,16 +359,12 @@ async fn run<B: Backend>(
     let (pr_title, pr_body) = if let Some((title, details)) = cached_gpt_response {
         app.add_log("INFO", "Reusing GPT response for PR (fresh branch)...");
         app.update_progress(0.5);
-        terminal.draw(|f| ui(f, app))?;
-        check_events(terminal, app, tick_rate, &mut last_tick)?;
+        refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
         (title, details)
     } else {
         app.add_log("INFO", "Generating PR details using AI...");
         app.update_progress(0.5);
-        terminal.draw(|f| ui(f, app))?;
-        check_events(terminal, app, tick_rate, &mut last_tick)?;
-
-        let issues_json = github_list_issues(app)?;
+        refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
 
         let (_, title, details) = gpt_generate_branch_name_and_commit_description(
             app,
@@ -413,7 +377,7 @@ async fn run<B: Backend>(
         .await?;
         (title, details)
     };
-    check_events(terminal, app, tick_rate, &mut last_tick)?;
+    refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
     app.add_log("INFO", format!("PR title: {pr_title}"));
     app.add_log(
         "INFO",
@@ -421,15 +385,13 @@ async fn run<B: Backend>(
     );
     terminal.draw(|f| ui(f, app))?;
 
-    check_events(terminal, app, tick_rate, &mut last_tick)?;
+    refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
     git_push_branch(app, &current_branch)?;
-    terminal.draw(|f| ui(f, app))?;
-    check_events(terminal, app, tick_rate, &mut last_tick)?;
+    refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
 
     app.add_log("INFO", "Creating pull request...");
     app.update_progress(0.8);
-    terminal.draw(|f| ui(f, app))?;
-    check_events(terminal, app, tick_rate, &mut last_tick)?;
+    refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
 
     if config.update_pr {
         app.add_log("INFO", "Updating existing pull request...");
@@ -452,44 +414,36 @@ async fn run<B: Backend>(
             app.add_error(format!("Failed to create/update pull request: {}", err));
             app.switch_to_tab(1);
             terminal.draw(|f| ui(f, app))?;
-            check_events(terminal, app, tick_rate, &mut last_tick)?;
-            // Cancel the UI task to avoid concurrent draws in the error case.
-            ui_update.abort();
+            refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
             // Await user input so the user can see the error message before exiting.
             run_event_loop(terminal, app, tick_rate, &mut last_tick)?;
             return Err(err);
         }
     }
-    terminal.draw(|f| ui(f, app))?;
-    check_events(terminal, app, tick_rate, &mut last_tick)?;
+    refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
 
     app.add_log("SUCCESS", "Pull request created successfully.");
     app.update_progress(1.0);
-    terminal.draw(|f| ui(f, app))?;
-    check_events(terminal, app, tick_rate, &mut last_tick)?;
+    refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
 
     // Handle cleanup differently for temp worktree vs regular worktree
     if !is_in_temp_worktree() {
         // Regular worktree cleanup
         git_checkout_branch(app, &original_branch)?;
-        terminal.draw(|f| ui(f, app))?;
-        check_events(terminal, app, tick_rate, &mut last_tick)?;
+        refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
 
         git_pull_branch(app, &original_branch)?;
-        terminal.draw(|f| ui(f, app))?;
-        check_events(terminal, app, tick_rate, &mut last_tick)?;
+        refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
 
         git_stash_pop_autostash_if_exists(app)?;
-        terminal.draw(|f| ui(f, app))?;
-        check_events(terminal, app, tick_rate, &mut last_tick)?;
+        refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
     } else {
         // Temp worktree cleanup - update original worktree to PR branch
         app.add_log(
             "INFO",
             "Preparing original worktree to switch to PR branch...",
         );
-        terminal.draw(|f| ui(f, app))?;
-        check_events(terminal, app, tick_rate, &mut last_tick)?;
+        refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
 
         // Store information for cleanup after temp worktree is dropped
         let pr_branch = current_branch.clone();
@@ -500,11 +454,7 @@ async fn run<B: Backend>(
             "INFO",
             "Original worktree will be switched to PR branch after cleanup",
         );
-        terminal.draw(|f| ui(f, app))?;
-        check_events(terminal, app, tick_rate, &mut last_tick)?;
-
-        // Cancel the UI progress-update task
-        ui_update.abort();
+        refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
 
         // Await user input before finishing so the UI remains visible.
         run_event_loop(terminal, app, tick_rate, &mut last_tick)?;
@@ -515,9 +465,6 @@ async fn run<B: Backend>(
         // Now update the original worktree to PR branch (after temp worktree is cleaned up)
         update_original_worktree_to_pr_branch(app, &pr_branch, &orig_branch, &orig_root)?;
     }
-
-    // Cancel the UI progress-update task (if not already done)
-    ui_update.abort();
 
     // Await user input before finishing so the UI remains visible (if not already done)
     if !is_in_temp_worktree() {
@@ -534,14 +481,16 @@ fn run_event_loop<B: Backend>(
     last_tick: &mut Instant,
 ) -> Result<(), Box<dyn std::error::Error>> {
     loop {
-        check_events(terminal, app, tick_rate, last_tick)?;
+        refresh_ui(terminal, app, tick_rate, last_tick)?;
         if app.should_quit {
             return Ok(());
         }
     }
 }
 
-fn check_events<B: Backend>(
+/// Draws the UI and checks for user input events.
+/// This is the main UI refresh function that should be called after state changes.
+fn refresh_ui<B: Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App<'_>,
     tick_rate: Duration,
@@ -572,8 +521,5 @@ fn check_events<B: Backend>(
         *last_tick = Instant::now();
     }
 
-    if app.should_quit {
-        return Ok(());
-    }
     Ok(())
 }
