@@ -48,12 +48,3 @@ fn test_git_run_diff_empty() {
         let _: GitRunDiffFn = git_run_diff;
     }
 }
-
-#[test]
-fn test_get_unstaged_patch_if_exists_signature() {
-    // Test that the function exists and has the right signature
-    // This ensures the function is properly exported and callable
-    fn _test_signature() {
-        let _: fn() -> Result<Vec<u8>, Box<dyn Error>> = get_unstaged_patch_if_exists;
-    }
-}

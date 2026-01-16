@@ -1,57 +1,7 @@
-use crate::git_ops::get_unstaged_patch_if_exists;
-use crate::App;
 use std::error::Error;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-
-/// Try to reuse recent patches created by git_fetch_main() to avoid duplication
-/// Returns (staged_patch, unstaged_patch) if recent patches found, otherwise empty vecs
-fn try_reuse_recent_patches(patches_dir: &Path) -> Result<(Vec<u8>, Vec<u8>), Box<dyn Error>> {
-    if !patches_dir.exists() {
-        return Ok((Vec::new(), Vec::new()));
-    }
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?
-        .as_secs();
-    const PATCH_REUSE_THRESHOLD_SECS: u64 = 10; // Only reuse patches created within last 10 seconds
-
-    let mut staged_patch = Vec::new();
-    let mut unstaged_patch = Vec::new();
-
-    // Look for recent patch files
-    if let Ok(entries) = fs_err::read_dir(patches_dir) {
-        for entry in entries {
-            let entry = entry?;
-            let path = entry.path();
-
-            if path.is_file() && path.extension().is_some_and(|ext| ext == "patch") {
-                if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
-                    // Extract timestamp from filename (format: staged-TIMESTAMP.patch or unstaged-TIMESTAMP.patch)
-                    if let Some(timestamp_str) =
-                        filename.split('-').nth(1).and_then(|s| s.split('.').next())
-                    {
-                        if let Ok(timestamp) = timestamp_str.parse::<u64>() {
-                            if now - timestamp <= PATCH_REUSE_THRESHOLD_SECS {
-                                // Recent patch found, read it
-                                let patch_content = fs_err::read(&path)?;
-
-                                if filename.starts_with("staged-") {
-                                    staged_patch = patch_content;
-                                } else if filename.starts_with("unstaged-") {
-                                    unstaged_patch = patch_content;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Ok((staged_patch, unstaged_patch))
-}
 
 /// RAII guard for the temp worktree
 pub struct TempWorktree {
@@ -61,9 +11,10 @@ pub struct TempWorktree {
 }
 
 impl TempWorktree {
-    /// Enter a detached worktree that lives in `.git/autopr-wt-<uuid>`.
+    /// Enter a detached worktree that lives in `.git/autopr-wt-<timestamp>`.
+    /// Captures all dirty state (staged, unstaged, untracked) and replays it in the temp worktree.
     pub fn enter() -> Result<Self, Box<dyn Error>> {
-        // 1. capture original location + branch + changes ------------------------
+        // 1. Capture original location and branch
         let orig_root = PathBuf::from(
             String::from_utf8(
                 Command::new("git")
@@ -82,7 +33,6 @@ impl TempWorktree {
         .trim()
         .to_owned();
 
-        // Try to reuse recent patches created by git_fetch_main() first
         let git_dir = PathBuf::from(
             String::from_utf8(
                 Command::new("git")
@@ -92,20 +42,26 @@ impl TempWorktree {
             )?
             .trim(),
         );
-        let patches_dir = git_dir.join("gh-autopr-patches");
-        let (staged_patch, unstaged_patch) = try_reuse_recent_patches(&patches_dir)?;
 
-        // If no recent patches found, create them fresh
-        let (staged_patch, unstaged_patch) = if staged_patch.is_empty() && unstaged_patch.is_empty()
-        {
-            let staged = Command::new("git")
-                .args(["diff", "--staged", "--binary"])
-                .output()?
-                .stdout;
-            let unstaged = get_unstaged_patch_if_exists()?;
-            (staged, unstaged)
-        } else {
-            (staged_patch, unstaged_patch)
+        // 2. Capture dirty state
+        let staged_patch = Command::new("git")
+            .args(["diff", "--staged", "--binary"])
+            .output()?
+            .stdout;
+
+        let unstaged_patch = {
+            let has_unstaged = !Command::new("git")
+                .args(["diff", "--quiet"])
+                .status()?
+                .success();
+            if has_unstaged {
+                Command::new("git")
+                    .args(["diff", "--binary"])
+                    .output()?
+                    .stdout
+            } else {
+                Vec::new()
+            }
         };
 
         let untracked_list = String::from_utf8(
@@ -115,7 +71,7 @@ impl TempWorktree {
                 .stdout,
         )?;
 
-        // 2. construct a path on the *same* filesystem (inside .git) -------------
+        // 3. Create temp worktree path inside .git
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_millis();
@@ -295,80 +251,6 @@ impl Drop for TempWorktree {
     }
 }
 
-/// Check if we're currently in a temporary worktree
-pub fn is_in_temp_worktree() -> bool {
-    if let Ok(current_dir) = std::env::current_dir() {
-        if let Some(dir_name) = current_dir.file_name().and_then(|n| n.to_str()) {
-            return dir_name.starts_with("autopr-wt-");
-        }
-    }
-    false
-}
-
-/// Clean up old patch files to prevent accumulation
-/// Removes patch files older than `days_old` days
-pub fn cleanup_old_patches(app: &mut App, days_old: u64) -> Result<(), Box<dyn Error>> {
-    let git_dir = PathBuf::from(
-        String::from_utf8(
-            Command::new("git")
-                .args(["rev-parse", "--git-dir"])
-                .output()?
-                .stdout,
-        )?
-        .trim(),
-    );
-    let patches_dir = git_dir.join("gh-autopr-patches");
-
-    if !patches_dir.exists() {
-        return Ok(());
-    }
-
-    let cutoff_time = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?
-        .as_secs()
-        - (days_old * 24 * 60 * 60);
-
-    let mut cleaned_count = 0;
-    for entry in fs_err::read_dir(&patches_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        if path.is_file() && path.extension().is_some_and(|ext| ext == "patch") {
-            if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
-                // Extract timestamp from filename (format: staged-TIMESTAMP.patch or unstaged-TIMESTAMP.patch)
-                if let Some(timestamp_str) =
-                    filename.split('-').nth(1).and_then(|s| s.split('.').next())
-                {
-                    if let Ok(timestamp) = timestamp_str.parse::<u64>() {
-                        if timestamp < cutoff_time {
-                            if let Err(e) = fs_err::remove_file(&path) {
-                                app.add_log(
-                                    "WARN",
-                                    format!(
-                                        "Failed to remove old patch file {}: {}",
-                                        path.display(),
-                                        e
-                                    ),
-                                );
-                            } else {
-                                cleaned_count += 1;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if cleaned_count > 0 {
-        app.add_log(
-            "INFO",
-            format!("Cleaned up {} old patch files", cleaned_count),
-        );
-    }
-
-    Ok(())
-}
 
 #[cfg(test)]
 #[path = "git_temp_worktree/tests.rs"]
