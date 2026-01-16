@@ -124,7 +124,7 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
             .iter()
             .enumerate()
             .map(|(i, t)| {
-                if i == 1 && app.error_tab_blink && (app.blink_timer % 2 == 0) {
+                if i == 1 && app.error_tab_blink && app.blink_timer.is_multiple_of(2) {
                     Span::styled(*t, Style::default().fg(Color::Red))
                 } else {
                     Span::styled(*t, Style::default().fg(Color::Green))

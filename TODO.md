@@ -46,3 +46,17 @@
 - **Problem**: `github_list_issues` called twice (cache mitigates impact but code is confusing)
 - **Fix**: Fetch once and reuse the variable
 - **Status**: [ ] Not started
+
+## Completed
+
+### 8. Flaky Integration Tests (FIXED)
+- **Location**: `tests/git_ops_tests.rs`
+- **Problem**: Tests used `env::set_current_dir()` which is global state - parallel tests interfered with each other
+- **Fix**: Added `serial_test` dependency and marked tests with `#[serial]`
+- **Status**: [x] COMPLETED
+
+### 9. Clippy Warning (FIXED)
+- **Location**: `src/tui.rs` line 127
+- **Problem**: Manual implementation of `.is_multiple_of()` - used `% 2 == 0` instead
+- **Fix**: Changed to `app.blink_timer.is_multiple_of(2)`
+- **Status**: [x] COMPLETED

@@ -4,6 +4,8 @@ use std::path::Path;
 use std::process::Command;
 use tempfile::TempDir;
 
+use serial_test::serial;
+
 // Import from the local crate
 use gh_autopr::git_ops::*;
 use gh_autopr::github_ops::*;
@@ -52,6 +54,7 @@ fn create_test_repo() -> (TempDir, String) {
 }
 
 #[test]
+#[serial]
 fn test_git_ensure_in_repo_success() {
     let (_temp_dir, repo_path) = create_test_repo();
     let original_dir = env::current_dir().expect("Failed to get current directory");
@@ -67,6 +70,7 @@ fn test_git_ensure_in_repo_success() {
 }
 
 #[test]
+#[serial]
 fn test_git_cd_to_repo_root() {
     let (_temp_dir, repo_path) = create_test_repo();
     let original_dir = env::current_dir().expect("Failed to get current directory");
@@ -104,6 +108,7 @@ fn test_truncate_utf8() {
 }
 
 #[test]
+#[serial]
 fn test_git_current_branch() {
     let (_temp_dir, repo_path) = create_test_repo();
     let original_dir = env::current_dir().expect("Failed to get current directory");
@@ -125,6 +130,7 @@ fn test_git_current_branch() {
 }
 
 #[test]
+#[serial]
 fn test_git_main_branch() {
     let (_temp_dir, repo_path) = create_test_repo();
     let original_dir = env::current_dir().expect("Failed to get current directory");
@@ -179,6 +185,7 @@ fn test_git_main_branch() {
 }
 
 #[test]
+#[serial]
 fn test_git_has_staged_changes() {
     let (_temp_dir, repo_path) = create_test_repo();
     let original_dir = env::current_dir().expect("Failed to get current directory");
@@ -208,6 +215,7 @@ fn test_git_has_staged_changes() {
 }
 
 #[test]
+#[serial]
 fn test_git_commit_staged_changes() {
     let (_temp_dir, repo_path) = create_test_repo();
     let original_dir = env::current_dir().expect("Failed to get current directory");
@@ -240,6 +248,7 @@ fn test_git_commit_staged_changes() {
 }
 
 #[test]
+#[serial]
 fn test_git_checkout_new_branch() {
     let (_temp_dir, repo_path) = create_test_repo();
     let original_dir = env::current_dir().expect("Failed to get current directory");
@@ -268,6 +277,7 @@ fn test_git_checkout_new_branch() {
 }
 
 #[test]
+#[serial]
 fn test_git_stage_and_commit() {
     let (_temp_dir, repo_path) = create_test_repo();
     let original_dir = env::current_dir().expect("Failed to get current directory");
@@ -307,6 +317,7 @@ fn test_discover_parent_branch_main_branch() {
 }
 
 #[test]
+#[serial]
 fn test_git_diff_uncommitted_empty() {
     let (_temp_dir, repo_path) = create_test_repo();
     let original_dir = env::current_dir().expect("Failed to get current directory");
@@ -324,6 +335,7 @@ fn test_git_diff_uncommitted_empty() {
 }
 
 #[test]
+#[serial]
 fn test_git_diff_uncommitted_with_changes() {
     let (_temp_dir, repo_path) = create_test_repo();
     let original_dir = env::current_dir().expect("Failed to get current directory");
@@ -352,6 +364,7 @@ fn test_git_diff_uncommitted_with_changes() {
 }
 
 #[test]
+#[serial]
 fn test_update_original_worktree_to_pr_branch() {
     let (_temp_dir, repo_path) = create_test_repo();
     let original_dir = env::current_dir().expect("Failed to get current directory");
@@ -570,6 +583,7 @@ fn test_update_original_worktree_to_pr_branch() {
 }
 
 #[test]
+#[serial]
 fn test_update_original_worktree_to_pr_branch_with_remote_tracking() {
     let (_temp_dir, repo_path) = create_test_repo();
     let original_dir = env::current_dir().expect("Failed to get current directory");
