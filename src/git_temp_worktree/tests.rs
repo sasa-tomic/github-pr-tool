@@ -26,7 +26,7 @@ fn test_temp_worktree_struct_fields() {
     // Verify the TempWorktree struct has the expected fields
     // This is a compile-time check that the struct exists and has the right shape
     use std::path::PathBuf;
-    
+
     // Can't actually create a TempWorktree without a git repo,
     // but we can verify the struct definition by checking its methods exist
     fn _check_original_root_method_exists() {
