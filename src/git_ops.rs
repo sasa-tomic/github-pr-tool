@@ -357,25 +357,39 @@ pub fn git_checkout_new_branch(
     current_branch: &str,
     force_reset: bool,
 ) -> Result<String, Box<dyn Error>> {
-    // Check if branch exists (unless force_reset is true)
-    if !force_reset {
-        let exists = Command::new("git")
-            .args(["rev-parse", "--verify", branch_name])
-            .status()?
-            .success();
+    let mut candidate = branch_name.to_owned();
 
-        if exists {
-            let e = format!(
-                "branch \"{branch_name}\" already exists (pass force_reset=true to rewrite)"
+    if !force_reset {
+        // If the branch already exists locally, pick a suffixed name instead of failing.
+        const MAX_SUFFIX: u32 = 20;
+        for suffix in 0..=MAX_SUFFIX {
+            let exists = Command::new("git")
+                .args(["rev-parse", "--verify", &candidate])
+                .status()?
+                .success();
+
+            if !exists {
+                break;
+            }
+
+            if suffix == MAX_SUFFIX {
+                let e = format!("branch \"{branch_name}\" (and suffixed variants) already exist");
+                app.add_error(e.clone());
+                return Err(e.into());
+            }
+
+            let next = next_branch_name(branch_name, suffix + 2);
+            app.add_log(
+                "WARN",
+                format!("Branch '{}' already exists, trying '{}'", candidate, next),
             );
-            app.add_error(e.clone());
-            return Err(e.into());
+            candidate = next;
         }
     }
 
     // Create or reset branch to current_branch's tip
     let output = Command::new("git")
-        .args(["checkout", "-B", branch_name, current_branch])
+        .args(["checkout", "-B", &candidate, current_branch])
         .output()?;
 
     if !output.status.success() {
@@ -386,10 +400,10 @@ pub fn git_checkout_new_branch(
 
     app.add_log(
         "INFO",
-        format!("Created branch \"{branch_name}\" from \"{current_branch}\""),
+        format!("Created branch \"{candidate}\" from \"{current_branch}\""),
     );
 
-    Ok(branch_name.to_owned())
+    Ok(candidate)
 }
 pub fn git_commit_staged_changes(
     app: &mut App,
@@ -529,7 +543,7 @@ fn try_push(app: &mut App, branch_name: &str) -> Result<Result<(), String>, Box<
 
 /// Derive a retry name: `foo/bar` + suffix 2 → `foo/bar-2`.
 fn next_branch_name(original: &str, suffix: u32) -> String {
-    format!("{}-it-{}", original, suffix)
+    format!("{}-iter-{}", original, suffix)
 }
 
 /// Creates or updates a pull request.
