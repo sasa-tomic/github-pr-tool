@@ -343,8 +343,8 @@ async fn run<B: Backend>(
     app.add_log("INFO", format!("PR title: {}", pr_title));
     refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
 
-    // Push branch
-    git_push_branch(app, &current_branch)?;
+    // Push branch (may rename if remote conflict)
+    current_branch = git_push_branch(app, &current_branch)?;
     refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
 
     // Create or update PR

@@ -446,8 +446,62 @@ pub fn git_stage_and_commit(
     Ok(())
 }
 
-pub fn git_push_branch(app: &mut App, branch_name: &str) -> Result<(), Box<dyn Error>> {
-    // Check if branch already has upstream tracking
+/// Push the current branch to origin. Returns the branch name that was actually
+/// pushed — this may differ from `branch_name` if a remote conflict forced a
+/// rename (e.g. `release/v0.2.0` → `release/v0.2.0-2`).
+pub fn git_push_branch(app: &mut App, branch_name: &str) -> Result<String, Box<dyn Error>> {
+    const MAX_RETRIES: u32 = 10;
+
+    let mut current_name = branch_name.to_owned();
+
+    for attempt in 0..=MAX_RETRIES {
+        let push_result = try_push(app, &current_name)?;
+
+        if push_result.is_ok() {
+            return Ok(current_name);
+        }
+        let err = push_result.unwrap_err();
+
+        // Only retry on remote-conflict errors
+        let is_conflict = err.contains("remote rejected")
+            || err.contains("already exists")
+            || err.contains("directory file conflict");
+
+        if !is_conflict || attempt == MAX_RETRIES {
+            app.add_error(err.clone());
+            return Err(format!("Failed to push branch: {}", err).into());
+        }
+
+        // Pick the next candidate name: branch-2, branch-3, …
+        let next_name = next_branch_name(branch_name, attempt + 2);
+        app.add_log(
+            "WARN",
+            format!(
+                "Push of '{}' rejected (remote conflict), renaming to '{}'",
+                current_name, next_name
+            ),
+        );
+
+        // Rename the local branch
+        let rename = Command::new("git")
+            .args(["branch", "-m", &current_name, &next_name])
+            .output()?;
+
+        if !rename.status.success() {
+            let rename_err = String::from_utf8_lossy(&rename.stderr).to_string();
+            app.add_error(rename_err.clone());
+            return Err(format!("Failed to rename branch: {}", rename_err).into());
+        }
+
+        current_name = next_name;
+    }
+
+    unreachable!()
+}
+
+/// Attempt a single push. Returns `Ok(Ok(()))` on success, or `Ok(Err(stderr))`
+/// on failure (so the caller can inspect the error without `?` short-circuiting).
+fn try_push(app: &mut App, branch_name: &str) -> Result<Result<(), String>, Box<dyn Error>> {
     let check_upstream = Command::new("git")
         .args(["rev-parse", "--abbrev-ref", &format!("{branch_name}@{{u}}")])
         .output()?;
@@ -456,7 +510,6 @@ pub fn git_push_branch(app: &mut App, branch_name: &str) -> Result<(), Box<dyn E
     let mut push_args = vec!["push"];
 
     if !has_upstream {
-        // If no upstream exists, set it up with the --set-upstream flag
         push_args.extend(["--set-upstream", "origin", branch_name]);
         app.add_log("INFO", "Setting up upstream tracking branch");
     } else {
@@ -465,14 +518,18 @@ pub fn git_push_branch(app: &mut App, branch_name: &str) -> Result<(), Box<dyn E
 
     let output = Command::new("git").args(&push_args).output()?;
 
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr).to_string();
-        app.add_error(err.clone());
-        return Err(format!("Failed to push branch: {}", err).into());
+    if output.status.success() {
+        app.add_log("INFO", format!("Pushed branch {} to origin", branch_name));
+        return Ok(Ok(()));
     }
 
-    app.add_log("INFO", format!("Pushed branch {} to origin", branch_name));
-    Ok(())
+    let err = String::from_utf8_lossy(&output.stderr).to_string();
+    Ok(Err(err))
+}
+
+/// Derive a retry name: `foo/bar` + suffix 2 → `foo/bar-2`.
+fn next_branch_name(original: &str, suffix: u32) -> String {
+    format!("{}-it-{}", original, suffix)
 }
 
 /// Creates or updates a pull request.
