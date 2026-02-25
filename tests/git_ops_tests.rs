@@ -318,6 +318,92 @@ fn test_discover_parent_branch_main_branch() {
 
 #[test]
 #[serial]
+fn test_discover_parent_branch_self_tracking_remote_returns_main() {
+    // Regression test: a branch tracking origin/<same-branch-name> should return
+    // main as its base, not itself.
+    let (_temp_dir, repo_path) = create_test_repo();
+    let original_dir = env::current_dir().expect("Failed to get current directory");
+
+    env::set_current_dir(&repo_path).expect("Failed to change directory");
+
+    // Set up a local bare remote
+    let remote_dir = _temp_dir.path().join("origin.git");
+    fs::create_dir(&remote_dir).expect("Failed to create remote dir");
+    Command::new("git")
+        .args(["init", "--bare"])
+        .current_dir(&remote_dir)
+        .output()
+        .expect("Failed to init bare repo");
+    Command::new("git")
+        .args(["remote", "add", "origin", remote_dir.to_str().unwrap()])
+        .current_dir(&repo_path)
+        .output()
+        .expect("Failed to add remote");
+    Command::new("git")
+        .args(["push", "origin", "main"])
+        .current_dir(&repo_path)
+        .output()
+        .expect("Failed to push main");
+
+    // Create a feature branch off main and push it so it tracks origin/<same-name>
+    Command::new("git")
+        .args(["checkout", "-b", "feature/my-work"])
+        .current_dir(&repo_path)
+        .output()
+        .expect("Failed to create branch");
+    fs::write(
+        std::path::Path::new(&repo_path).join("work.txt"),
+        "some work",
+    )
+    .expect("Failed to write file");
+    Command::new("git")
+        .args(["add", "work.txt"])
+        .current_dir(&repo_path)
+        .output()
+        .expect("Failed to stage");
+    Command::new("git")
+        .args(["commit", "-m", "Some work"])
+        .current_dir(&repo_path)
+        .output()
+        .expect("Failed to commit");
+    Command::new("git")
+        .args(["push", "--set-upstream", "origin", "feature/my-work"])
+        .current_dir(&repo_path)
+        .output()
+        .expect("Failed to push branch");
+
+    // Verify the upstream is origin/feature/my-work (self-tracking)
+    let upstream = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "feature/my-work@{upstream}"])
+        .current_dir(&repo_path)
+        .output()
+        .expect("Failed to get upstream");
+    let upstream_str = String::from_utf8(upstream.stdout)
+        .unwrap()
+        .trim()
+        .to_string();
+    assert_eq!(
+        upstream_str, "origin/feature/my-work",
+        "Branch should track origin/feature/my-work"
+    );
+
+    // The bug: discover_parent_branch used to return "feature/my-work" (itself).
+    // After the fix it should return "main".
+    let mut app = App::new("Test App");
+    let result = discover_parent_branch(&mut app, "main", "feature/my-work");
+
+    assert!(result.is_ok());
+    assert_eq!(
+        result.unwrap(),
+        "main",
+        "A branch tracking its own origin remote should fall back to main as base"
+    );
+
+    let _ = env::set_current_dir(&original_dir);
+}
+
+#[test]
+#[serial]
 fn test_git_diff_uncommitted_empty() {
     let (_temp_dir, repo_path) = create_test_repo();
     let original_dir = env::current_dir().expect("Failed to get current directory");

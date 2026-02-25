@@ -224,7 +224,7 @@ pub fn discover_parent_branch(
 
     // 1. explicit upstream, if configured
     if let Some(up) = upstream_of(child)? {
-        if up != main_branch {
+        if up != child {
             app.add_log("INFO", format!("Found upstream branch: {}", up));
             return Ok(up);
         }
