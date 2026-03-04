@@ -25,7 +25,10 @@ pub fn git_ensure_not_detached_head<B: Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
     branch_name: &String,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn Error>>
+where
+    <B as Backend>::Error: 'static,
+{
     if branch_name == "HEAD" {
         app.add_log(
             "ERROR",

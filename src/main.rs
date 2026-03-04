@@ -155,7 +155,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn restore_terminal<B: Backend + std::io::Write>(
     terminal: &mut Terminal<B>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    <B as Backend>::Error: 'static,
+{
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -194,7 +197,10 @@ async fn pre_worktree_setup<B: Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App<'_>,
     tick_rate: Duration,
-) -> Result<BranchInfo, Box<dyn std::error::Error>> {
+) -> Result<BranchInfo, Box<dyn std::error::Error>>
+where
+    <B as Backend>::Error: 'static,
+{
     let mut last_tick = Instant::now();
 
     app.add_log("INFO", "Checking git repository...");
@@ -235,7 +241,10 @@ async fn run<B: Backend>(
     mut app_config: AppConfig,
     branch_info: BranchInfo,
     temp_worktree: TempWorktree,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    <B as Backend>::Error: 'static,
+{
     let mut last_tick = Instant::now();
     refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
 
@@ -414,7 +423,10 @@ async fn get_api_key<B: Backend>(
     app: &mut App<'_>,
     terminal: &mut Terminal<B>,
     app_config: &mut AppConfig,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    <B as Backend>::Error: 'static,
+{
     if app_config.ai.api_key.is_some() {
         app.add_log(
             "INFO",
@@ -474,7 +486,10 @@ fn run_event_loop<B: Backend>(
     app: &mut App<'_>,
     tick_rate: Duration,
     last_tick: &mut Instant,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    <B as Backend>::Error: 'static,
+{
     loop {
         refresh_ui(terminal, app, tick_rate, last_tick)?;
         if app.should_quit {
@@ -490,7 +505,10 @@ fn refresh_ui<B: Backend>(
     app: &mut App<'_>,
     tick_rate: Duration,
     last_tick: &mut Instant,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    <B as Backend>::Error: 'static,
+{
     terminal.draw(|f| ui(f, app))?;
 
     let timeout = tick_rate.saturating_sub(last_tick.elapsed());

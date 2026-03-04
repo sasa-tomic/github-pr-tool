@@ -134,9 +134,7 @@ impl AppConfig {
             }
         }
 
-        if let Ok(v) =
-            std::env::var("AUTOPR_MODEL").or_else(|_| std::env::var("OPENAI_MODEL"))
-        {
+        if let Ok(v) = std::env::var("AUTOPR_MODEL").or_else(|_| std::env::var("OPENAI_MODEL")) {
             self.ai.model = Some(v);
         }
 
@@ -154,11 +152,14 @@ impl AppConfig {
 
     /// Effective model, using a sensible default for the provider.
     pub fn model(&self) -> &str {
-        self.ai.model.as_deref().unwrap_or_else(|| match self.provider() {
-            // Use the model name exactly as listed in Anthropic's API docs.
-            // Verify current names at https://docs.anthropic.com/en/docs/about-claude/models
-            "anthropic" => "claude-opus-4-6",
-            _ => "gpt-4o-mini",
-        })
+        self.ai
+            .model
+            .as_deref()
+            .unwrap_or_else(|| match self.provider() {
+                // Use the model name exactly as listed in Anthropic's API docs.
+                // Verify current names at https://docs.anthropic.com/en/docs/about-claude/models
+                "anthropic" => "claude-opus-4-6",
+                _ => "gpt-4o-mini",
+            })
     }
 }

@@ -219,9 +219,8 @@ async fn call_openai(
                 return Err(format!("OpenAI API error HTTP {}: {}", status, raw));
             }
 
-            let parsed: OpenAiResponse = serde_json::from_str(&raw).map_err(|e| {
-                format!("OpenAI response parse error: {}\nRaw body: {}", e, raw)
-            })?;
+            let parsed: OpenAiResponse = serde_json::from_str(&raw)
+                .map_err(|e| format!("OpenAI response parse error: {}\nRaw body: {}", e, raw))?;
 
             parsed
                 .choices
@@ -229,7 +228,10 @@ async fn call_openai(
                 .next()
                 .and_then(|c| c.message.content)
                 .ok_or_else(|| {
-                    format!("OpenAI API returned no choices or empty content.\nRaw body: {}", raw)
+                    format!(
+                        "OpenAI API returned no choices or empty content.\nRaw body: {}",
+                        raw
+                    )
                 })
         })
     })

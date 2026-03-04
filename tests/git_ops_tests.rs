@@ -16,9 +16,9 @@ fn create_test_repo() -> (TempDir, String) {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
     let repo_path = temp_dir.path().to_str().unwrap().to_string();
 
-    // Initialize git repo
+    // Initialize git repo with main as default branch
     Command::new("git")
-        .args(["init"])
+        .args(["init", "-b", "main"])
         .current_dir(&temp_dir)
         .output()
         .expect("Failed to initialize git repo");
@@ -1248,12 +1248,21 @@ fn test_create_pr_error_no_existing_pr_to_update() {
 
 #[test]
 #[serial]
-fn test_git_checkout_new_branch_error_branch_exists() {
-    // Test that creating a branch that already exists fails appropriately
+fn test_git_checkout_new_branch_auto_renames_when_exists() {
+    // Test that creating a branch that already exists auto-renames to a suffixed variant
     let (_temp_dir, repo_path) = create_test_repo();
     let original_dir = env::current_dir().expect("Failed to get current directory");
 
     env::set_current_dir(&repo_path).expect("Failed to change directory");
+
+    // Get the current branch name (could be main or master depending on git version)
+    let current_branch_output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .expect("Failed to get current branch");
+    let current_branch = String::from_utf8_lossy(&current_branch_output.stdout)
+        .trim()
+        .to_string();
 
     // Create a branch first
     Command::new("git")
@@ -1262,19 +1271,23 @@ fn test_git_checkout_new_branch_error_branch_exists() {
         .expect("Failed to create branch");
 
     Command::new("git")
-        .args(["checkout", "main"])
+        .args(["checkout", &current_branch])
         .output()
-        .expect("Failed to checkout main");
+        .expect("Failed to checkout base branch");
 
     let mut app = App::new("Test App");
 
     // Try to create the same branch again without force_reset
-    let result = git_checkout_new_branch(&mut app, "existing-branch", "main", false);
+    // Should auto-rename to existing-branch-iter-2
+    let result = git_checkout_new_branch(&mut app, "existing-branch", &current_branch, false);
 
-    assert!(result.is_err(), "Should fail when branch already exists");
+    assert!(result.is_ok(), "Should succeed with auto-renamed branch");
+    assert_eq!(result.unwrap(), "existing-branch-iter-2");
     assert!(
-        app.errors.iter().any(|e| e.contains("already exists")),
-        "Error should mention branch already exists"
+        app.logs
+            .iter()
+            .any(|(level, msg)| { *level == "WARN" && msg.contains("already exists") }),
+        "Should warn about branch already existing"
     );
 
     let _ = env::set_current_dir(&original_dir);

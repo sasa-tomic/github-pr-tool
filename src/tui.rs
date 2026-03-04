@@ -6,7 +6,6 @@ use ratatui::{
     widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, Tabs},
     Terminal,
 };
-use std::io;
 
 pub struct TabsState<'a> {
     pub titles: Vec<&'a str>,
@@ -214,7 +213,10 @@ pub fn render_message<B: Backend>(
     title: &str,
     message: &str,
     color: Color,
-) -> Result<(), io::Error> {
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    <B as Backend>::Error: 'static,
+{
     terminal.draw(|f| {
         let area = f.area();
         let block = Block::default().borders(Borders::ALL).title(Span::styled(
