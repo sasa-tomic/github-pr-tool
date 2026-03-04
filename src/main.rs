@@ -1,8 +1,10 @@
+mod config;
 mod git_ops;
 mod git_temp_worktree;
 mod github_ops;
 mod gpt_ops;
 mod tui;
+use crate::config::AppConfig;
 use crate::git_ops::*;
 use crate::git_temp_worktree::*;
 use crate::github_ops::*;
@@ -82,6 +84,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return run_prune_branches();
     }
 
+    // Create a stub config if none exists, then ask the user to fill it in.
+    if AppConfig::ensure_stub()? {
+        let path = AppConfig::config_file_path()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "~/.config/gh-autopr/config.toml".to_string());
+        eprintln!("Created {}", path);
+        eprintln!("Edit the file to set your API key and provider, then re-run gh-autopr.");
+        return Ok(());
+    }
+
     // Initialize the terminal for PR creation mode
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
@@ -114,11 +126,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // All subsequent Git commands act inside the isolated worktree
     let temp_worktree = TempWorktree::enter()?;
 
+    let app_config = AppConfig::load();
+
     let app_result = run(
         &mut terminal,
         &mut app,
         tick_rate,
         config,
+        app_config,
         branch_info,
         temp_worktree,
     )
@@ -217,15 +232,15 @@ async fn run<B: Backend>(
     app: &mut App<'_>,
     tick_rate: Duration,
     config: RunConfig,
+    mut app_config: AppConfig,
     branch_info: BranchInfo,
     temp_worktree: TempWorktree,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut last_tick = Instant::now();
     refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
 
-    // Get OpenAI API key
-    let api_key = get_openai_key(app, terminal).await?;
-    std::env::set_var("OPENAI_KEY", api_key);
+    // Resolve API key (config file / env var already applied; check keyring as fallback)
+    get_api_key(app, terminal, &mut app_config).await?;
 
     app.add_log("INFO", "Working in temp worktree...");
     app.update_progress(0.1);
@@ -278,6 +293,7 @@ async fn run<B: Backend>(
         let (generated_branch_name, commit_title, commit_details) =
             gpt_generate_branch_name_and_commit_description(
                 app,
+                &app_config,
                 diff_uncommitted,
                 Some(issues_json.clone()),
                 config.what.clone(),
@@ -329,6 +345,7 @@ async fn run<B: Backend>(
 
             let (_, title, details) = gpt_generate_branch_name_and_commit_description(
                 app,
+                &app_config,
                 diff_between_branches,
                 Some(issues_json),
                 config.what,
@@ -391,39 +408,65 @@ async fn run<B: Backend>(
     Ok(())
 }
 
-async fn get_openai_key<B: Backend>(
+/// Resolve the API key into `app_config.ai.api_key`, using keyring as a fallback.
+/// The config has already applied env var overrides at load time; this only adds keyring lookup.
+async fn get_api_key<B: Backend>(
     app: &mut App<'_>,
     terminal: &mut Terminal<B>,
-) -> Result<String, Box<dyn std::error::Error>> {
-    // Try keyring first
-    if let Ok(entry) = keyring::Entry::new("gh-autopr", "openai_key") {
+    app_config: &mut AppConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if app_config.ai.api_key.is_some() {
+        app.add_log(
+            "INFO",
+            format!(
+                "Found {} API key in config/environment",
+                app_config.provider()
+            ),
+        );
+        return Ok(());
+    }
+
+    let keyring_account = match app_config.provider() {
+        "anthropic" => "anthropic_key",
+        _ => "openai_key",
+    };
+
+    if let Ok(entry) = keyring::Entry::new("gh-autopr", keyring_account) {
         if let Ok(key) = entry.get_password() {
-            app.add_log("INFO", "Found OpenAI key in keyring");
-            return Ok(key);
+            app.add_log("INFO", "Found API key in keyring");
+            app_config.ai.api_key = Some(key);
+            return Ok(());
         }
 
-        // Try environment variable and store in keyring
-        if let Ok(key) = std::env::var("OPENAI_KEY") {
-            app.add_log(
-                "INFO",
-                "Found OpenAI key in environment, storing in keyring",
-            );
+        // Cache env var into keyring for next run
+        let env_key = match app_config.provider() {
+            "anthropic" => std::env::var("ANTHROPIC_API_KEY").ok(),
+            _ => std::env::var("OPENAI_KEY")
+                .or_else(|_| std::env::var("OPENAI_API_KEY"))
+                .ok(),
+        };
+        if let Some(key) = env_key {
+            app.add_log("INFO", "Found API key in environment, storing in keyring");
             let _ = entry.set_password(&key);
-            return Ok(key);
+            app_config.ai.api_key = Some(key);
+            return Ok(());
         }
     }
 
-    // Try environment variable without keyring
-    if let Ok(key) = std::env::var("OPENAI_KEY") {
-        app.add_log("INFO", "Found OpenAI key in environment");
-        return Ok(key);
-    }
-
-    app.add_error("OpenAI key not found in keyring or environment");
+    let provider = app_config.provider().to_string();
+    app.add_error(format!(
+        "{} API key not found. Set it via `api_key` in ~/.config/gh-autopr/config.toml, \
+         the {} env var, or the system keyring.",
+        provider,
+        match provider.as_str() {
+            "anthropic" => "ANTHROPIC_API_KEY",
+            _ => "OPENAI_KEY",
+        }
+    ));
     app.switch_to_tab(1);
     terminal.draw(|f| ui(f, app))?;
     tokio::time::sleep(Duration::from_secs(2)).await;
-    Err("OpenAI key not found".into())
+    Err(format!("{} API key not found", provider).into())
 }
 
 fn run_event_loop<B: Backend>(

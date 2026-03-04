@@ -140,8 +140,10 @@ async fn test_gpt_generate_integration() {
     let diff_context = "diff --git a/test.txt b/test.txt\nnew file mode 100644\nindex 0000000..ce01362\n--- /dev/null\n+++ b/test.txt\n@@ -0,0 +1 @@\n+hello world".to_string();
     let issues_json = Some("[]".to_string());
 
+    let config = crate::config::AppConfig::default();
     let result = gpt_generate_branch_name_and_commit_description(
         &mut app,
+        &config,
         diff_context,
         issues_json,
         None,

@@ -1,8 +1,10 @@
+use crate::config::AppConfig;
 use crate::tui::App;
 use openai::{
     chat::{ChatCompletion, ChatCompletionMessage, ChatCompletionMessageRole},
     Credentials,
 };
+use serde::Deserialize;
 use std::time::Duration;
 
 /// Retries an async operation up to MAX_RETRIES times with exponential backoff.
@@ -20,14 +22,12 @@ where
             Ok(result) => return Ok(result),
             Err(err) => {
                 if attempt == MAX_RETRIES {
-                    // Exhausted all retries, fail
                     return Err(err);
                 }
 
-                // Calculate exponential backoff: 1s, 2s, 4s
                 let delay_ms = INITIAL_DELAY_MS * 2u64.pow(attempt - 1);
                 eprintln!(
-                    "GPT API call attempt {}/{} failed: {}. Retrying in {}ms...",
+                    "AI API call attempt {}/{} failed: {}. Retrying in {}ms...",
                     attempt, MAX_RETRIES, err, delay_ms
                 );
                 tokio::time::sleep(Duration::from_millis(delay_ms)).await;
@@ -37,6 +37,193 @@ where
 
     unreachable!("Loop should have returned or exhausted retries")
 }
+
+// ─── Anthropic response types ─────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct AnthropicResponse {
+    content: Vec<AnthropicContentBlock>,
+}
+
+#[derive(Deserialize)]
+struct AnthropicContentBlock {
+    #[serde(rename = "type")]
+    block_type: String,
+    text: Option<String>,
+}
+
+// ─── Provider dispatch ────────────────────────────────────────────────────────
+
+/// Call the configured AI provider and return the raw text response.
+async fn call_ai_api(
+    config: &AppConfig,
+    system_message: &str,
+    user_message: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    match config.provider() {
+        "anthropic" => call_anthropic(config, system_message, user_message).await,
+        _ => call_openai(config, system_message, user_message).await,
+    }
+}
+
+/// Call the Anthropic Messages API directly via HTTP.
+async fn call_anthropic(
+    config: &AppConfig,
+    system_message: &str,
+    user_message: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let api_key = config
+        .ai
+        .api_key
+        .as_deref()
+        .ok_or("Anthropic API key not set. Set `api_key` in ~/.config/gh-autopr/config.toml or ANTHROPIC_API_KEY env var.")?
+        .to_string();
+
+    let base_url = config
+        .ai
+        .base_url
+        .as_deref()
+        .unwrap_or("https://api.anthropic.com")
+        .to_string();
+    let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
+    let model = config.model().to_string();
+    let system = system_message.to_string();
+    let user = user_message.to_string();
+
+    let response_text = retry_with_backoff(|| {
+        let model = model.clone();
+        let system = system.clone();
+        let user = user.clone();
+        let api_key = api_key.clone();
+        let url = url.clone();
+        Box::pin(async move {
+            let body = serde_json::json!({
+                "model": model,
+                "max_tokens": 2048,
+                "system": system,
+                "messages": [{"role": "user", "content": user}]
+            });
+
+            let client = reqwest::Client::new();
+            let resp = client
+                .post(&url)
+                .header("x-api-key", &api_key)
+                .header("anthropic-version", "2023-06-01") // stable API version
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| format!("Anthropic HTTP error: {}", e))?;
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let text = resp.text().await.unwrap_or_default();
+                return Err(format!("Anthropic API error {}: {}", status, text));
+            }
+
+            let parsed: AnthropicResponse = resp
+                .json()
+                .await
+                .map_err(|e| format!("Anthropic response parse error: {}", e))?;
+
+            parsed
+                .content
+                .into_iter()
+                .find(|b| b.block_type == "text")
+                .and_then(|b| b.text)
+                .ok_or_else(|| "Anthropic API returned no text content".to_string())
+        })
+    })
+    .await
+    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+
+    Ok(response_text)
+}
+
+/// Call the OpenAI-compatible API using the `openai` crate.
+async fn call_openai(
+    config: &AppConfig,
+    system_message: &str,
+    user_message: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    // Propagate config into env vars so the openai crate can pick them up.
+    if let Some(key) = &config.ai.api_key {
+        std::env::set_var("OPENAI_KEY", key);
+    }
+    if let Some(base_url) = &config.ai.base_url {
+        std::env::set_var("OPENAI_BASE_URL", base_url);
+    }
+
+    let credentials = Credentials::from_env();
+    let model = config.model().to_string();
+
+    let messages = vec![
+        ChatCompletionMessage {
+            role: ChatCompletionMessageRole::System,
+            content: Some(system_message.to_string()),
+            ..Default::default()
+        },
+        ChatCompletionMessage {
+            role: ChatCompletionMessageRole::User,
+            content: Some(user_message.to_string()),
+            ..Default::default()
+        },
+    ];
+
+    let chat_request = retry_with_backoff(|| {
+        let model = model.clone();
+        let messages = messages.clone();
+        let credentials = credentials.clone();
+        Box::pin(async move {
+            ChatCompletion::builder(&model, messages)
+                .credentials(credentials)
+                .create()
+                .await
+                .map_err(|e| e.to_string())
+        })
+    })
+    .await
+    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+
+    let first_choice = chat_request
+        .choices
+        .first()
+        .ok_or_else(|| {
+            let base_url = config
+                .ai
+                .base_url
+                .as_deref()
+                .unwrap_or("https://api.openai.com/v1");
+            let key_preview = config
+                .ai
+                .api_key
+                .as_deref()
+                .map(|k| {
+                    if k.len() >= 8 {
+                        format!("{}...", &k[..8])
+                    } else {
+                        k.to_string()
+                    }
+                })
+                .unwrap_or_else(|| "not set".to_string());
+            format!(
+                "OpenAI API returned no choices. This may indicate:\n\
+                 - Invalid model name: '{}'\n\
+                 - Invalid base URL or API authentication error\n\
+                 - API rate limit or service error\n\
+                 \n\
+                 Debug info:\n\
+                 - Base URL: {}\n\
+                 - API Key: {}\n\
+                 \n\
+                 Check AUTOPR_MODEL, AUTOPR_BASE_URL, and AUTOPR_API_KEY (or OPENAI_* equivalents).",
+                model, base_url, key_preview
+            )
+        })?;
+
+    Ok(first_choice.message.content.clone().unwrap_or_default())
+}
+
+// ─── JSON helpers ─────────────────────────────────────────────────────────────
 
 /// Attempts to repair common GPT JSON mistakes
 ///
@@ -55,13 +242,10 @@ fn try_repair_json(json: &str) -> Option<String> {
         }
 
         if !in_string {
-            // Remove trailing commas before } or ]
             if c == ',' {
-                // Look ahead to see if next non-whitespace is } or ]
                 let rest: String = chars.clone().collect();
                 let trimmed = rest.trim_start();
                 if trimmed.starts_with('}') || trimmed.starts_with(']') {
-                    // Skip this comma
                     continue;
                 }
             }
@@ -73,22 +257,15 @@ fn try_repair_json(json: &str) -> Option<String> {
         repaired.push(c);
     }
 
-    // Try parsing the repaired JSON
     if serde_json::from_str::<serde_json::Value>(&repaired).is_ok() {
         return Some(repaired);
     }
 
-    // More aggressive repair: try to fix bare strings in objects
-    // Pattern: look for ,"string"} and convert to ,"Note":"string"}
     let mut aggressive = repaired.clone();
 
-    // Find patterns like ,"..." followed eventually by } without a : in between
-    // This is a heuristic that handles the specific GPT error we've seen
-    // Handle both with and without whitespace: `,"Closes` or `, "Closes`
     let prefixes = ["Closes", "Relates to", "See", "Fixes", "Related to"];
 
     for prefix in prefixes {
-        // Pattern: , "Prefix ..." } (with possible whitespace)
         let patterns = [
             (
                 format!(r#", "{}"#, prefix),
@@ -112,13 +289,6 @@ fn try_repair_json(json: &str) -> Option<String> {
 }
 
 /// Validates if a string is a valid git branch name
-///
-/// Git branch names must not contain:
-/// - Spaces
-/// - Special characters like :, (, ), [, ], {, }, ?, *, ^, ~, \, etc.
-/// - Start or end with dots
-/// - Consecutive dots
-/// - Be empty or just a dash
 fn is_valid_git_branch_name(name: &str) -> bool {
     if name.is_empty() || name == "-" {
         return false;
@@ -132,10 +302,8 @@ fn is_valid_git_branch_name(name: &str) -> bool {
         return false;
     }
 
-    // Check for invalid characters
     for c in name.chars() {
         match c {
-            // Allow alphanumeric, hyphens, underscores, forward slashes, and dots
             'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '/' | '.' => continue,
             _ => return false,
         }
@@ -144,17 +312,20 @@ fn is_valid_git_branch_name(name: &str) -> bool {
     true
 }
 
+// ─── Public API ───────────────────────────────────────────────────────────────
+
 pub async fn gpt_generate_branch_name_and_commit_description(
     app: &mut App<'_>,
+    config: &AppConfig,
     diff_context: String,
     issues_json: Option<String>,
     what_arg: Option<String>,
     why_arg: Option<String>,
     bigger_picture_arg: Option<String>,
 ) -> Result<(String, String, Option<String>), Box<dyn std::error::Error>> {
-    const MAX_ISSUES_LEN: usize = 16 * 1024; // 16K characters limit for issues
-    let credentials = Credentials::from_env();
-    let mut system_message_content = String::from(
+    const MAX_ISSUES_LEN: usize = 16 * 1024;
+
+    let mut system_message = String::from(
         r#"You prepare concise GitHub Pull Requests.
 
 OUTPUT
@@ -197,91 +368,41 @@ STYLE
     );
 
     if let Some(what) = what_arg.clone() {
-        system_message_content.push_str(&format!("\n\nUser provided 'what': {}", what));
+        system_message.push_str(&format!("\n\nUser provided 'what': {}", what));
     }
     if let Some(why) = why_arg.clone() {
-        system_message_content.push_str(&format!("\n\nUser provided 'why': {}", why));
+        system_message.push_str(&format!("\n\nUser provided 'why': {}", why));
     }
     if let Some(bigger_picture) = bigger_picture_arg.clone() {
-        system_message_content.push_str(&format!(
+        system_message.push_str(&format!(
             "\n\nUser provided 'bigger picture': {}",
             bigger_picture
         ));
     }
 
-    let messages = vec![
-        ChatCompletionMessage {
-            role: ChatCompletionMessageRole::System,
-            content: Some(system_message_content),
-            ..Default::default()
-        },
-        ChatCompletionMessage {
-            role: ChatCompletionMessageRole::User,
-            content: Some(format!(
-                "Context:\n{}\n\nOpen GitHub Issues:\n{}",
-                diff_context,
-                issues_json
-                    .map(|j| if j.len() > MAX_ISSUES_LEN {
-                        j[..MAX_ISSUES_LEN].to_string()
-                    } else {
-                        j
-                    })
-                    .unwrap_or_else(|| "No open issues".to_string())
-            )),
-            ..Default::default()
-        },
-    ];
-    let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-5-mini".to_string());
+    let user_message = format!(
+        "Context:\n{}\n\nOpen GitHub Issues:\n{}",
+        diff_context,
+        issues_json
+            .map(|j| if j.len() > MAX_ISSUES_LEN {
+                j[..MAX_ISSUES_LEN].to_string()
+            } else {
+                j
+            })
+            .unwrap_or_else(|| "No open issues".to_string())
+    );
 
-    // Retry the API call with exponential backoff
-    let chat_request = retry_with_backoff(|| {
-        let model = model.clone();
-        let messages = messages.clone();
-        let credentials = credentials.clone();
-        Box::pin(async move {
-            ChatCompletion::builder(&model, messages)
-                .credentials(credentials)
-                .create()
-                .await
-        })
-    })
-    .await?;
+    app.add_log(
+        "INFO",
+        format!("Calling {} ({})", config.provider(), config.model()),
+    );
 
-    let first_choice = chat_request.choices.first().ok_or_else(|| {
-        // Get base URL and API key for debugging
-        let base_url = std::env::var("OPENAI_BASE_URL")
-            .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
-        let api_key = std::env::var("OPENAI_KEY")
-            .or_else(|_| std::env::var("OPENAI_API_KEY"))
-            .unwrap_or_else(|_| "not set".to_string());
-
-        // Show first 8 characters of the token for debugging (safe to show)
-        let token_preview = if api_key != "not set" && api_key.len() >= 8 {
-            format!("{}...", &api_key[..8])
-        } else {
-            api_key.clone()
-        };
-
-        let error_msg = format!(
-            "OpenAI API returned no choices. This may indicate:\n\
-                - Invalid model name: '{}'\n\
-                - Invalid base URL configuration\n\
-                - API authentication error\n\
-                - API rate limit or service error\n\
-                \n\
-                Debug info:\n\
-                - Base URL: {}\n\
-                - API Key: {}\n\
-                \n\
-                Check your OPENAI_MODEL, OPENAI_BASE_URL, and OPENAI_KEY environment variables.",
-            model, base_url, token_preview
-        );
-        app.add_error(error_msg.clone());
-        app.switch_to_tab(1);
-        std::io::Error::other(error_msg)
-    })?;
-
-    let chat_response = first_choice.message.content.clone().unwrap_or_default();
+    let chat_response = call_ai_api(config, &system_message, &user_message)
+        .await
+        .inspect_err(|e| {
+            app.add_error(e.to_string());
+            app.switch_to_tab(1);
+        })?;
 
     let chat_response = chat_response
         .trim()
@@ -291,11 +412,10 @@ STYLE
         .to_string();
 
     app.add_log("INFO", format!("chat_response: {}", chat_response));
-    // Parse the JSON response, attempting repair if needed
+
     let parsed_response: serde_json::Value = match serde_json::from_str(&chat_response) {
         Ok(value) => value,
         Err(err) => {
-            // Try to repair common GPT JSON mistakes
             app.add_log(
                 "WARN",
                 format!("JSON parse failed: {}, attempting repair", err),
@@ -326,6 +446,7 @@ STYLE
             }
         }
     };
+
     let branch_name = parsed_response["branch_name"]
         .as_str()
         .unwrap_or("my-pr-branch")
@@ -334,12 +455,11 @@ STYLE
         .as_str()
         .unwrap_or("Generic commit title")
         .to_string();
-    // Handle commit_details - can be string, null, or (incorrectly) an object
+
     let commit_details = match &parsed_response["commit_details"] {
         serde_json::Value::String(s) => Some(s.clone()),
         serde_json::Value::Null => None,
         serde_json::Value::Object(obj) => {
-            // GPT sometimes returns structured data; convert to Markdown string
             let mut md = String::new();
             for (key, value) in obj {
                 if key.starts_with("###") || key.starts_with("##") || key.starts_with('#') {
@@ -371,10 +491,10 @@ STYLE
         _ => None,
     };
 
-    // Validate the branch name
     if !is_valid_git_branch_name(&branch_name) {
         let error_msg = format!(
-            "GPT returned invalid branch name: '{}'. Branch names must only contain letters, numbers, hyphens, underscores, and forward slashes. No spaces, parentheses, colons, or other special characters allowed.",
+            "AI returned invalid branch name: '{}'. Branch names must only contain letters, \
+             numbers, hyphens, underscores, and forward slashes.",
             branch_name
         );
         app.add_error(error_msg.clone());
