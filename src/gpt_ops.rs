@@ -1,9 +1,5 @@
 use crate::config::AppConfig;
 use crate::tui::App;
-use openai::{
-    chat::{ChatCompletion, ChatCompletionMessage, ChatCompletionMessageRole},
-    Credentials,
-};
 use serde::Deserialize;
 use std::time::Duration;
 
@@ -139,88 +135,108 @@ async fn call_anthropic(
     Ok(response_text)
 }
 
-/// Call the OpenAI-compatible API using the `openai` crate.
+// ─── OpenAI-compatible response types ────────────────────────────────────────
+//
+// Defined with only the fields we need; serde ignores unknown fields by
+// default, so extra fields like `reasoning_content` from thinking models
+// are transparently dropped.
+
+#[derive(Deserialize)]
+struct OpenAiResponse {
+    choices: Vec<OpenAiChoice>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiChoice {
+    message: OpenAiMessage,
+}
+
+#[derive(Deserialize)]
+struct OpenAiMessage {
+    content: Option<String>,
+}
+
+/// Call any OpenAI-compatible chat completions endpoint via direct HTTP.
+///
+/// Using `reqwest` directly means:
+/// - The raw response body is always available for error messages.
+/// - Unknown fields from non-standard providers (e.g. `reasoning_content`)
+///   are silently ignored rather than causing a parse failure.
 async fn call_openai(
     config: &AppConfig,
     system_message: &str,
     user_message: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    // Propagate config into env vars so the openai crate can pick them up.
-    if let Some(key) = &config.ai.api_key {
-        std::env::set_var("OPENAI_KEY", key);
-    }
-    if let Some(base_url) = &config.ai.base_url {
-        std::env::set_var("OPENAI_BASE_URL", base_url);
-    }
+    let api_key = config
+        .ai
+        .api_key
+        .as_deref()
+        .ok_or("OpenAI API key not set. Set `api_key` in ~/.config/gh-autopr/config.toml or OPENAI_KEY env var.")?
+        .to_string();
 
-    let credentials = Credentials::from_env();
+    let base_url = config
+        .ai
+        .base_url
+        .as_deref()
+        .unwrap_or("https://api.openai.com/v1")
+        .to_string();
+    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let model = config.model().to_string();
+    let system = system_message.to_string();
+    let user = user_message.to_string();
 
-    let messages = vec![
-        ChatCompletionMessage {
-            role: ChatCompletionMessageRole::System,
-            content: Some(system_message.to_string()),
-            ..Default::default()
-        },
-        ChatCompletionMessage {
-            role: ChatCompletionMessageRole::User,
-            content: Some(user_message.to_string()),
-            ..Default::default()
-        },
-    ];
-
-    let chat_request = retry_with_backoff(|| {
+    let response_text = retry_with_backoff(|| {
         let model = model.clone();
-        let messages = messages.clone();
-        let credentials = credentials.clone();
+        let system = system.clone();
+        let user = user.clone();
+        let api_key = api_key.clone();
+        let url = url.clone();
         Box::pin(async move {
-            ChatCompletion::builder(&model, messages)
-                .credentials(credentials)
-                .create()
+            let body = serde_json::json!({
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user",   "content": user},
+                ]
+            });
+
+            let client = reqwest::Client::new();
+            let resp = client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", api_key))
+                .json(&body)
+                .send()
                 .await
-                .map_err(|e| e.to_string())
+                .map_err(|e| format!("OpenAI HTTP error: {}", e))?;
+
+            let status = resp.status();
+            let raw = resp
+                .text()
+                .await
+                .unwrap_or_else(|_| "<failed to read body>".to_string());
+
+            if !status.is_success() {
+                return Err(format!("OpenAI API error HTTP {}: {}", status, raw));
+            }
+
+            let parsed: OpenAiResponse = serde_json::from_str(&raw).map_err(|e| {
+                format!("OpenAI response parse error: {}\nRaw body: {}", e, raw)
+            })?;
+
+            parsed
+                .choices
+                .into_iter()
+                .next()
+                .and_then(|c| c.message.content)
+                .ok_or_else(|| {
+                    format!("OpenAI API returned no choices or empty content.\nRaw body: {}", raw)
+                })
         })
     })
     .await
     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
-    let first_choice = chat_request
-        .choices
-        .first()
-        .ok_or_else(|| {
-            let base_url = config
-                .ai
-                .base_url
-                .as_deref()
-                .unwrap_or("https://api.openai.com/v1");
-            let key_preview = config
-                .ai
-                .api_key
-                .as_deref()
-                .map(|k| {
-                    if k.len() >= 8 {
-                        format!("{}...", &k[..8])
-                    } else {
-                        k.to_string()
-                    }
-                })
-                .unwrap_or_else(|| "not set".to_string());
-            format!(
-                "OpenAI API returned no choices. This may indicate:\n\
-                 - Invalid model name: '{}'\n\
-                 - Invalid base URL or API authentication error\n\
-                 - API rate limit or service error\n\
-                 \n\
-                 Debug info:\n\
-                 - Base URL: {}\n\
-                 - API Key: {}\n\
-                 \n\
-                 Check AUTOPR_MODEL, AUTOPR_BASE_URL, and AUTOPR_API_KEY (or OPENAI_* equivalents).",
-                model, base_url, key_preview
-            )
-        })?;
-
-    Ok(first_choice.message.content.clone().unwrap_or_default())
+    Ok(response_text)
 }
 
 // ─── JSON helpers ─────────────────────────────────────────────────────────────
