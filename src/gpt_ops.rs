@@ -113,7 +113,10 @@ async fn call_anthropic(
             if !resp.status().is_success() {
                 let status = resp.status();
                 let text = resp.text().await.unwrap_or_default();
-                return Err(format!("Anthropic API error {}: {}", status, text));
+                return Err(format!(
+                    "Anthropic API error: URL={}, status={}, body={}",
+                    url, status, text
+                ));
             }
 
             let parsed: AnthropicResponse = resp

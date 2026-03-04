@@ -112,9 +112,13 @@ impl AppConfig {
     ///
     /// Variable priority:
     /// - Provider:  `AUTOPR_PROVIDER`
-    /// - API key:   `AUTOPR_API_KEY` > `ANTHROPIC_API_KEY` (anthropic) / `OPENAI_KEY` or `OPENAI_API_KEY` (openai)
-    /// - Model:     `AUTOPR_MODEL` > `OPENAI_MODEL` (backward compat)
-    /// - Base URL:  `AUTOPR_BASE_URL` > `OPENAI_BASE_URL` (backward compat)
+    /// - API key:   `AUTOPR_API_KEY` > provider-specific fallback
+    /// - Model:     `AUTOPR_MODEL` > provider-specific fallback
+    /// - Base URL:  `AUTOPR_BASE_URL` > provider-specific fallback
+    ///
+    /// Provider-specific fallbacks:
+    /// - anthropic: `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `ANTHROPIC_BASE_URL`
+    /// - openai:    `OPENAI_KEY`/`OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_BASE_URL`
     fn apply_env_overrides(&mut self) {
         if let Ok(v) = std::env::var("AUTOPR_PROVIDER") {
             self.ai.provider = Some(v);
@@ -134,14 +138,28 @@ impl AppConfig {
             }
         }
 
-        if let Ok(v) = std::env::var("AUTOPR_MODEL").or_else(|_| std::env::var("OPENAI_MODEL")) {
+        if let Ok(v) = std::env::var("AUTOPR_MODEL") {
             self.ai.model = Some(v);
+        } else if self.ai.model.is_none() {
+            let model = match self.provider() {
+                "anthropic" => std::env::var("ANTHROPIC_MODEL").ok(),
+                _ => std::env::var("OPENAI_MODEL").ok(),
+            };
+            if let Some(m) = model {
+                self.ai.model = Some(m);
+            }
         }
 
-        if let Ok(v) =
-            std::env::var("AUTOPR_BASE_URL").or_else(|_| std::env::var("OPENAI_BASE_URL"))
-        {
+        if let Ok(v) = std::env::var("AUTOPR_BASE_URL") {
             self.ai.base_url = Some(v);
+        } else if self.ai.base_url.is_none() {
+            let url = match self.provider() {
+                "anthropic" => std::env::var("ANTHROPIC_BASE_URL").ok(),
+                _ => std::env::var("OPENAI_BASE_URL").ok(),
+            };
+            if let Some(u) = url {
+                self.ai.base_url = Some(u);
+            }
         }
     }
 
