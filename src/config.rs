@@ -11,11 +11,18 @@ use std::path::PathBuf;
 /// api_key  = "sk-ant-..."      # API key (prefer env var or keyring over plaintext)
 /// model    = "claude-opus-4-6" # model name; see https://docs.anthropic.com/en/docs/about-claude/models
 /// base_url = "https://..."     # optional custom endpoint
+///
+/// [review]
+/// enabled = true                    # optional: default true; set false to skip review entirely
+/// command = "opencode run --json" # optional: if set and enabled, review runs automatically
+/// max_rounds = 2                    # optional: autonomous prep loop cap
 /// ```
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct AppConfig {
     #[serde(default)]
     pub ai: AiConfig,
+    #[serde(default)]
+    pub review: ReviewConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -28,6 +35,31 @@ pub struct AiConfig {
     pub model: Option<String>,
     /// Optional custom base URL (e.g. for local proxies or compatible endpoints)
     pub base_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ReviewConfig {
+    /// Whether review is enabled. Defaults to true.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// External review command (reads prompt from stdin, outputs strict JSON)
+    pub command: Option<String>,
+    /// Max autonomous prep rounds before giving up
+    pub max_rounds: Option<u32>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for ReviewConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            command: None,
+            max_rounds: None,
+        }
+    }
 }
 
 const STUB: &str = r#"# gh-autopr configuration — edit this file, then re-run gh-autopr.
@@ -51,6 +83,20 @@ model = "claude-opus-4-6"
 # api_key  = ""        # or set OPENAI_KEY in your environment
 # model    = "gpt-4o-mini"
 # base_url = "https://api.openai.com/v1"  # optional
+
+[review]
+# Review is enabled by default. Set to false to skip review entirely.
+enabled = true
+
+# Optional: if set, diff review runs automatically before PR creation.
+# Works with ACP/opencode/ralph CLI/any agent that reads stdin and outputs strict JSON.
+# command = "opencode run --json"
+
+# Optional autonomous prep loop cap.
+# max_rounds = 2
+
+# If you prefer the ralph CLI, put your command wrapper here, e.g.:
+# command = "ralph run --json"
 "#;
 
 impl AppConfig {
@@ -115,6 +161,9 @@ impl AppConfig {
     /// - API key:   `AUTOPR_API_KEY` > provider-specific fallback
     /// - Model:     `AUTOPR_MODEL` > provider-specific fallback
     /// - Base URL:  `AUTOPR_BASE_URL` > provider-specific fallback
+    /// - Review enabled: `AUTOPR_REVIEW_ENABLED`
+    /// - Review cmd: `AUTOPR_REVIEW_COMMAND`
+    /// - Review rounds: `AUTOPR_REVIEW_MAX_ROUNDS`
     ///
     /// Provider-specific fallbacks:
     /// - anthropic: `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `ANTHROPIC_BASE_URL`
@@ -161,6 +210,21 @@ impl AppConfig {
                 self.ai.base_url = Some(u);
             }
         }
+
+        if let Ok(v) = std::env::var("AUTOPR_REVIEW_ENABLED") {
+            let normalized = v.trim().to_ascii_lowercase();
+            self.review.enabled = matches!(normalized.as_str(), "1" | "true" | "yes" | "on");
+        }
+
+        if let Ok(v) = std::env::var("AUTOPR_REVIEW_COMMAND") {
+            self.review.command = Some(v);
+        }
+
+        if let Ok(v) = std::env::var("AUTOPR_REVIEW_MAX_ROUNDS") {
+            if let Ok(parsed) = v.parse::<u32>() {
+                self.review.max_rounds = Some(parsed.max(1));
+            }
+        }
     }
 
     /// Effective provider (defaults to "openai").
@@ -179,5 +243,52 @@ impl AppConfig {
                 "anthropic" => "claude-opus-4-6",
                 _ => "gpt-4o-mini",
             })
+    }
+
+    pub fn review_enabled(&self) -> bool {
+        self.review.enabled
+    }
+
+    pub fn review_command(&self) -> Option<&str> {
+        self.review.command.as_deref().and_then(|v| {
+            if self.review_enabled() && !v.trim().is_empty() {
+                Some(v)
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn review_max_rounds(&self) -> u32 {
+        self.review.max_rounds.unwrap_or(2).max(1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn review_defaults_are_stable() {
+        let cfg = AppConfig::default();
+        assert!(cfg.review_enabled());
+        assert!(cfg.review_command().is_none());
+        assert_eq!(cfg.review_max_rounds(), 2);
+    }
+
+    #[test]
+    fn review_command_trims_empty_values() {
+        let mut cfg = AppConfig::default();
+        cfg.review.command = Some("   ".to_string());
+        assert!(cfg.review_command().is_none());
+    }
+
+    #[test]
+    fn review_command_respects_enabled_flag() {
+        let mut cfg = AppConfig::default();
+        cfg.review.command = Some("opencode run --json".to_string());
+        cfg.review.enabled = false;
+        assert!(!cfg.review_enabled());
+        assert!(cfg.review_command().is_none());
     }
 }
