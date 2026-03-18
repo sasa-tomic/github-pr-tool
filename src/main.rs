@@ -3,12 +3,14 @@ mod git_ops;
 mod git_temp_worktree;
 mod github_ops;
 mod gpt_ops;
+mod review_ops;
 mod tui;
 use crate::config::AppConfig;
 use crate::git_ops::*;
 use crate::git_temp_worktree::*;
 use crate::github_ops::*;
 use crate::gpt_ops::*;
+use crate::review_ops::*;
 use crate::tui::*;
 use clap::Parser;
 use ratatui::{
@@ -57,6 +59,14 @@ struct Args {
     /// Prune local branches that have been merged
     #[arg(long, visible_aliases = ["prune", "cleanup"])]
     prune_branches: bool,
+
+    /// External command used for diff review; receives review prompt on stdin and must output JSON
+    #[arg(long)]
+    review_command: Option<String>,
+
+    /// Maximum autonomous review/prep rounds when external reviewer requests additional prep
+    #[arg(long, default_value_t = 2)]
+    review_max_rounds: u32,
 }
 
 /// Configuration passed from CLI args to the run function
@@ -67,6 +77,8 @@ struct RunConfig {
     what: Option<String>,
     why: Option<String>,
     bigger_picture: Option<String>,
+    review_command: Option<String>,
+    review_max_rounds: u32,
 }
 
 /// Branch information gathered before entering temp worktree
@@ -111,6 +123,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         what: args.what,
         why: args.why,
         bigger_picture: args.bigger_picture,
+        review_command: args.review_command,
+        review_max_rounds: args.review_max_rounds,
     };
 
     // Do git operations that need original worktree BEFORE entering temp worktree
@@ -339,15 +353,95 @@ where
         return Ok(());
     }
 
+    // External diff review + prep gate before any push/PR creation
+    // CLI flags override user-level config; config values run automatically when set.
+    let review_enabled = app_config.review_enabled();
+    let effective_review_command = if review_enabled {
+        config
+            .review_command
+            .clone()
+            .or_else(|| app_config.review_command().map(ToString::to_string))
+    } else {
+        app.add_log(
+            "INFO",
+            "Review disabled in user config; skipping external review.",
+        );
+        None
+    };
+    let effective_review_max_rounds = if config.review_command.is_some() {
+        config.review_max_rounds
+    } else {
+        app_config.review_max_rounds()
+    };
+
+    let review_result = review_and_prepare_change(
+        app,
+        &ExternalReviewConfig {
+            review_command: effective_review_command,
+            max_rounds: effective_review_max_rounds,
+        },
+        &base_branch,
+        &current_branch,
+        diff_between_branches.clone(),
+    )?;
+
+    app.add_log("INFO", format!("Review verdict: {}", review_result.summary));
+    for item in &review_result.feedback {
+        app.add_log("INFO", format!("Review feedback: {}", item));
+    }
+    refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
+
+    match review_result.decision {
+        ReviewDecision::NotWorthSubmission => {
+            app.add_log(
+                "INFO",
+                "Review blocked PR submission as not worth submitting.",
+            );
+            app.update_progress(1.0);
+            refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
+            run_event_loop(terminal, app, tick_rate, &mut last_tick)?;
+            return Ok(());
+        }
+        ReviewDecision::NeedsUserFeedback => {
+            app.add_log("INFO", "Review requires user feedback before submission.");
+            app.add_log(
+                "INFO",
+                "Interactive question answering is not supported in this TUI flow yet; re-run with answers/context.",
+            );
+            for q in &review_result.questions {
+                app.add_log("INFO", format!("Question: {}", q));
+            }
+            app.update_progress(1.0);
+            refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
+            run_event_loop(terminal, app, tick_rate, &mut last_tick)?;
+            return Ok(());
+        }
+        ReviewDecision::NeedsAutonomousPrep => {
+            return Err(
+                "Unexpected review state: autonomous prep should have converged"
+                    .to_string()
+                    .into(),
+            );
+        }
+        ReviewDecision::ReadyForSubmission => {
+            app.add_log("INFO", "Review marked change as ready for submission.");
+        }
+    }
+
+    // Re-read final diff in case autonomous prep amended the commit.
+    let final_diff_between_branches =
+        git_diff_between_branches(app, &base_branch, &current_branch)?;
+    refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
+
     // Get PR title/body (reuse cached or generate new)
     let (pr_title, pr_body) = match cached_gpt_response {
-        Some((title, details)) => {
+        Some((title, details)) if final_diff_between_branches == diff_between_branches => {
             app.add_log("INFO", "Reusing generated content for PR...");
             app.update_progress(0.5);
             refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
             (title, details)
         }
-        None => {
+        _ => {
             app.add_log("INFO", "Generating PR details...");
             app.update_progress(0.5);
             refresh_ui(terminal, app, tick_rate, &mut last_tick)?;
@@ -355,7 +449,7 @@ where
             let (_, title, details) = gpt_generate_branch_name_and_commit_description(
                 app,
                 &app_config,
-                diff_between_branches,
+                final_diff_between_branches,
                 Some(issues_json),
                 config.what,
                 config.why,

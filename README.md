@@ -8,7 +8,8 @@ The GitHub PR Tool is a Rust-based command-line utility designed to streamline t
 
 - **Smart Branch Naming**: Automatically generate descriptive branch names based on the content of your changes.
 - **Commit Message Assistance**: Create concise commit titles and optional detailed descriptions using OpenAI's LLM.
-- **Automated Workflow**: Stage changes, create a branch, commit changes, and open a pull request with minimal effort.
+- **Automated Workflow**: Stage changes, create a branch, commit changes, run optional external review/prep, and open a pull request with minimal effort.
+- **External Diff Review Gate**: Optionally run ACP/opencode/other CLI agents as a diff reviewer before push + PR creation, with support for blocking, user-feedback, autonomous prep loops, and ready-to-submit decisions.
 - **Interactive Staging**: Offers to stage unstaged changes interactively if no changes are staged.
 - **Error Handling**: Validates prerequisites like being inside a Git repository and having the OpenAI API key set.
 
@@ -53,11 +54,39 @@ The GitHub PR Tool is a Rust-based command-line utility designed to streamline t
    - Check for staged changes.
    - If none are staged, interactively ask to stage unstaged changes.
    - Generate a branch name and commit message based on the changes.
-   - Create a new branch, commit changes, and open a pull request.
+   - Optionally run an external reviewer (`--review-command`) on the branch diff and enforce one of: block submission, request user feedback, autonomously prepare/amend, or proceed.
+   - Create/update a pull request only when the review verdict is ready for submission.
+
+### Optional Review Command
+
+Configure `[review]` in `~/.config/gh-autopr/config.toml` to run review automatically every time. Review is enabled by default; set `enabled = false` to disable it. Use `--review-command` to override per-run when review is enabled.
+
+You can invoke any CLI reviewer (for example ACP, `opencode`, or `ralph`) that reads a prompt from stdin and returns strict JSON with a decision.
+
+```bash
+gh-autopr --review-command "opencode run --json" --review-max-rounds 3
+```
+
+
+### User-level config example
+
+```toml
+[review]
+enabled = true
+command = "opencode run --json"
+max_rounds = 3
+```
+
+Supported decisions:
+- `not_worth_submission`: stop and report feedback, no PR submitted
+- `needs_user_feedback`: stop and present reviewer questions, no PR submitted
+- `needs_autonomous_prep`: run provided prep commands, amend commit, then re-review (loop)
+- `ready_for_submission`: continue to push + PR creation
 
 ## Environment Variables
 
 - `OPENAI_KEY`: Your OpenAI API key, required for generating branch names and commit messages.
+- `AUTOPR_REVIEW_ENABLED`: Optional review toggle (`true/false`); defaults to enabled.
 
 ## Example
 
