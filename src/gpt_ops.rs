@@ -10,7 +10,7 @@ where
     F: FnMut() -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<T, E>> + Send>>,
     E: std::fmt::Display,
 {
-    const MAX_RETRIES: u32 = 3;
+    const MAX_RETRIES: u32 = 30;
     const INITIAL_DELAY_MS: u64 = 1000;
 
     for attempt in 1..=MAX_RETRIES {
